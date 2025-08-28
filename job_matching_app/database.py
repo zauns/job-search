@@ -50,4 +50,6 @@ def get_db_context() -> Generator[Session, None, None]:
 
 def init_db():
     """Initialize database tables"""
+    # Import models to register them with SQLAlchemy
+    from . import models  # noqa: F401
     Base.metadata.create_all(bind=engine)

@@ -6,6 +6,8 @@ from alembic import context
 # Import your models here
 from job_matching_app.database import Base
 from job_matching_app.config import get_settings
+# Import all models to ensure they're registered with Base.metadata
+from job_matching_app.models import *
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

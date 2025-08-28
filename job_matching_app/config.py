@@ -23,7 +23,10 @@ class Settings(BaseSettings if PYDANTIC_AVAILABLE else object):
         
         # Ollama settings
         self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-        self.ollama_model = os.getenv("OLLAMA_MODEL", "llama2")
+        self.ollama_model = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+        self.ollama_timeout = int(os.getenv("OLLAMA_TIMEOUT", "30"))
+        self.ollama_temperature = float(os.getenv("OLLAMA_TEMPERATURE", "0.3"))
+        self.ollama_enabled = os.getenv("OLLAMA_ENABLED", "true").lower() == "true"
         
         # Application directories
         self.app_dir = Path.home() / ".job_matching_app"
