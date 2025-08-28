@@ -48,11 +48,95 @@ make init-db
 
 ## Usage
 
-### Basic Commands
+### Quick Start Scripts
 
-Check application status:
+The application includes convenient scripts for easy operation:
+
+#### Application Runner (`scripts/run_app.py`)
+
+**Show help and available commands:**
+```bash
+python scripts/run_app.py help
+```
+
+**Check application status:**
+```bash
+python scripts/run_app.py status
+```
+
+**Check LaTeX installation:**
+```bash
+python scripts/run_app.py latex
+```
+
+**Resume management:**
+```bash
+# List all uploaded resumes
+python scripts/run_app.py resume list
+
+# Upload a LaTeX resume
+python scripts/run_app.py resume upload path/to/resume.tex
+
+# Show resume details
+python scripts/run_app.py resume show <resume_id>
+
+# Compile resume to PDF
+python scripts/run_app.py resume compile <resume_id>
+
+# Delete a resume
+python scripts/run_app.py resume delete <resume_id>
+```
+
+**Windows users can use the batch file:**
+```cmd
+run_app.bat status
+run_app.bat resume list
+```
+
+#### Database Management (`scripts/db_cleanse.py`)
+
+**Interactive database management (recommended):**
+```bash
+python scripts/db_cleanse.py interactive
+```
+
+**Show database status:**
+```bash
+python scripts/db_cleanse.py status
+```
+
+**Clear specific data:**
+```bash
+# Clear resume data
+python scripts/db_cleanse.py clear resumes
+
+# Clear job listing data
+python scripts/db_cleanse.py clear jobs
+
+# Clear job match data
+python scripts/db_cleanse.py clear matches
+
+# Clear all data
+python scripts/db_cleanse.py clear all
+
+# Reset entire database (drop/recreate tables)
+python scripts/db_cleanse.py reset
+```
+
+**Windows users can use the batch file:**
+```cmd
+db_cleanse.bat
+db_cleanse.bat status
+```
+
+### Direct CLI Commands
+
+You can also use the application directly:
+
 ```bash
 python -m job_matching_app.main status
+python -m job_matching_app.main resume list
+python -m job_matching_app.main check-latex
 ```
 
 ### Development
@@ -94,6 +178,30 @@ job_matching_app/
 ├── requirements.txt           # Python dependencies
 └── README.md                  # This file
 ```
+
+## Script Features
+
+### Application Runner Features
+- **Development Mode**: Automatic environment setup and configuration
+- **Status Monitoring**: Check application health and dependencies
+- **LaTeX Validation**: Verify LaTeX installation and functionality
+- **Resume Management**: Complete CRUD operations for resume handling
+- **Cross-Platform**: Works on Windows, macOS, and Linux
+- **Rich Output**: Colored console output with progress indicators
+
+### Database Cleansing Features
+- **Interactive Menu**: Safe, guided database operations
+- **Selective Clearing**: Target specific data types (resumes, jobs, matches)
+- **Safety Confirmations**: Prevent accidental data loss
+- **Foreign Key Awareness**: Handles table dependencies correctly
+- **Status Overview**: View current database state and record counts
+- **Complete Reset**: Drop and recreate all tables when needed
+
+### Safety Measures
+- **Confirmation Prompts**: All destructive operations require confirmation
+- **Error Handling**: Comprehensive error messages and recovery
+- **Dependency Management**: Automatic virtual environment detection
+- **Backup Recommendations**: Clear warnings before data deletion
 
 ## Configuration
 

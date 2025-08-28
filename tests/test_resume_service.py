@@ -136,48 +136,81 @@ class TestResumeUpload:
 class TestLaTeXCompilation:
     """Test LaTeX compilation functionality"""
     
+    @patch('job_matching_app.services.resume_service.ResumeService._find_pdflatex')
     @patch('subprocess.run')
-    def test_compile_to_pdf_success(self, mock_run, resume_service, valid_latex_content):
+    @patch('os.path.exists')
+    @patch('builtins.open', create=True)
+    @patch('os.makedirs')
+    @patch('shutil.rmtree')
+    def test_compile_to_pdf_success(self, mock_rmtree, mock_makedirs, mock_open, mock_exists, mock_run, mock_find_pdflatex, resume_service, valid_latex_content):
         """Test successful PDF compilation"""
-        # Mock successful pdflatex execution
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        # Mock pdflatex found
+        mock_find_pdflatex.return_value = 'pdflatex'
         
-        # Mock PDF file creation
-        with patch('pathlib.Path.exists', return_value=True), \
-             patch('builtins.open', create=True) as mock_open:
-            mock_open.return_value.__enter__.return_value.read.return_value = b"PDF content"
-            
-            pdf_content = resume_service.compile_to_pdf(valid_latex_content)
-            
-            assert isinstance(pdf_content, bytes)
-            assert pdf_content == b"PDF content"
+        # Mock successful pdflatex execution
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        
+        # Mock PDF file creation and reading
+        mock_exists.return_value = True
+        mock_open.return_value.__enter__.return_value.read.return_value = b"PDF content"
+        
+        pdf_content = resume_service.compile_to_pdf(valid_latex_content)
+        
+        assert isinstance(pdf_content, bytes)
+        assert pdf_content == b"PDF content"
     
+    @patch('job_matching_app.services.resume_service.ResumeService._find_pdflatex')
     @patch('subprocess.run')
-    def test_compile_to_pdf_failure(self, mock_run, resume_service, valid_latex_content):
+    @patch('builtins.open', create=True)
+    @patch('os.makedirs')
+    @patch('shutil.rmtree')
+    def test_compile_to_pdf_failure(self, mock_rmtree, mock_makedirs, mock_open, mock_run, mock_find_pdflatex, resume_service, valid_latex_content):
         """Test PDF compilation failure"""
+        # Mock pdflatex found
+        mock_find_pdflatex.return_value = 'pdflatex'
+        
+        # Mock file operations
+        mock_open.return_value.__enter__.return_value.write.return_value = None
+        
         # Mock failed pdflatex execution
-        mock_run.return_value = MagicMock(returncode=1, stderr="LaTeX Error")
+        mock_run.return_value = MagicMock(returncode=1, stdout="LaTeX Error", stderr="LaTeX Error")
         
         with pytest.raises(LaTeXCompilationError, match="LaTeX compilation failed"):
             resume_service.compile_to_pdf(valid_latex_content)
+        
+        mock_find_pdflatex.assert_called_once()
     
-    @patch('subprocess.run')
-    def test_compile_pdflatex_not_found(self, mock_run, resume_service, valid_latex_content):
+    @patch('job_matching_app.services.resume_service.ResumeService._find_pdflatex')
+    def test_compile_pdflatex_not_found(self, mock_find_pdflatex, resume_service, valid_latex_content):
         """Test compilation when pdflatex is not installed"""
-        mock_run.side_effect = FileNotFoundError()
+        # Mock pdflatex not found
+        mock_find_pdflatex.return_value = None
         
         with pytest.raises(LaTeXCompilationError, match="pdflatex not found"):
             resume_service.compile_to_pdf(valid_latex_content)
     
+    @patch('job_matching_app.services.resume_service.ResumeService._find_pdflatex')
     @patch('subprocess.run')
-    def test_compile_pdf_not_created(self, mock_run, resume_service, valid_latex_content):
+    @patch('os.path.exists')
+    @patch('builtins.open', create=True)
+    @patch('os.makedirs')
+    @patch('shutil.rmtree')
+    def test_compile_pdf_not_created(self, mock_rmtree, mock_makedirs, mock_open, mock_exists, mock_run, mock_find_pdflatex, resume_service, valid_latex_content):
         """Test compilation when PDF file is not created"""
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        # Mock pdflatex found
+        mock_find_pdflatex.return_value = 'pdflatex'
         
-        # Mock PDF file not existing
-        with patch('pathlib.Path.exists', return_value=False):
-            with pytest.raises(LaTeXCompilationError, match="PDF file was not created"):
-                resume_service.compile_to_pdf(valid_latex_content)
+        # Mock file operations
+        mock_open.return_value.__enter__.return_value.write.return_value = None
+        
+        # Mock successful pdflatex execution but PDF file not created
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_exists.return_value = False
+        
+        with pytest.raises(LaTeXCompilationError, match="PDF file was not created"):
+            resume_service.compile_to_pdf(valid_latex_content)
+        
+        mock_find_pdflatex.assert_called_once()
 
 
 class TestResumeManagement:
@@ -288,4 +321,4 @@ class TestLaTeXInstallationCheck:
         is_installed, version_info = resume_service.check_latex_installation()
         
         assert not is_installed
-        assert "command failed" in version_info
+        assert "pdflatex not found" in version_info

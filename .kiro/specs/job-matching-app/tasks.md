@@ -24,7 +24,8 @@
   - Write unit tests for model validation and relationships
   - _Requirements: 8.1, 8.2, 8.4_
 
-- [ ] 3. Implement LaTeX resume processing service
+- [x] 3. Implement LaTeX resume processing service
+
 
 
   - Create ResumeService class with LaTeX validation functionality
@@ -33,7 +34,12 @@
   - Write unit tests for LaTeX validation and PDF compilation
   - _Requirements: 1.1, 1.2, 1.3, 1.4_
 
-- [ ] 4. Integrate Ollama for AI-powered keyword extraction
+- [x] 4. Integrate Ollama for AI-powered keyword extraction
+
+
+
+
+
 
 
 

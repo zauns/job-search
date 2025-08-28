@@ -4,6 +4,9 @@ Resume processing service for LaTeX resume handling
 import os
 import subprocess
 import tempfile
+import shutil
+import uuid
+import platform
 from pathlib import Path
 from typing import Optional, List, Tuple
 from sqlalchemy.orm import Session
@@ -95,6 +98,59 @@ class ResumeService:
         """
         return validate_latex_content(content)
     
+    def _find_pdflatex(self) -> Optional[str]:
+        """
+        Find pdflatex executable in common locations
+        
+        Returns:
+            Path to pdflatex executable or None if not found
+        """
+        common_paths = [
+            'pdflatex',  # In PATH
+            r'C:\Program Files\MiKTeX\miktex\bin\x64\pdflatex.exe',
+            r'C:\Program Files (x86)\MiKTeX\miktex\bin\pdflatex.exe',
+            r'C:\texlive\2023\bin\win32\pdflatex.exe',
+            r'C:\texlive\2024\bin\win32\pdflatex.exe',
+            r'C:\texlive\2025\bin\win32\pdflatex.exe',
+            r'C:\Users\{}\AppData\Local\Programs\MiKTeX\miktex\bin\x64\pdflatex.exe'.format(os.environ.get('USERNAME', '')),
+        ]
+        
+        for pdflatex_path in common_paths:
+            try:
+                result = subprocess.run([pdflatex_path, '--version'], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    return pdflatex_path
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                continue
+            except Exception:
+                continue
+        
+        return None
+    
+    def _check_miktex_updates(self) -> bool:
+        """
+        Check for MiKTeX updates to avoid compilation warnings
+        
+        Returns:
+            bool: True if check was successful
+        """
+        try:
+            # Try to run MiKTeX update check
+            result = subprocess.run(['miktex', 'packages', 'check-update'], 
+                                  capture_output=True, text=True, timeout=30)
+            return True
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            # If MiKTeX console is not available, try alternative
+            try:
+                result = subprocess.run(['mpm', '--check-update'], 
+                                      capture_output=True, text=True, timeout=30)
+                return True
+            except:
+                return False
+        except Exception:
+            return False
+
     def compile_to_pdf(self, latex_content: str, output_path: Optional[str] = None) -> bytes:
         """
         Compile LaTeX content to PDF
@@ -109,48 +165,113 @@ class ResumeService:
         Raises:
             LaTeXCompilationError: If compilation fails
         """
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            tex_file = temp_path / "resume.tex"
-            pdf_file = temp_path / "resume.pdf"
+        # Find pdflatex executable
+        pdflatex_path = self._find_pdflatex()
+        if not pdflatex_path:
+            raise LaTeXCompilationError(
+                "pdflatex not found. Please install a LaTeX distribution:\n"
+                "• Windows: Install MiKTeX (https://miktex.org/) or TeX Live\n"
+                "• After installation, restart your terminal/IDE"
+            )
+        
+        # Note: Skipping MiKTeX update check to avoid timeouts
+        
+        # Create a temporary directory in the current working directory to avoid path issues
+        current_dir = os.getcwd()
+        temp_dir_name = f"latex_temp_{uuid.uuid4().hex[:8]}"
+        temp_dir = os.path.join(current_dir, temp_dir_name)
+        
+        try:
+            # Create temporary directory
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            tex_file = os.path.join(temp_dir, "resume.tex")
+            pdf_file = os.path.join(temp_dir, "resume.pdf")
             
             # Write LaTeX content to temporary file
             with open(tex_file, 'w', encoding='utf-8') as f:
                 f.write(latex_content)
             
-            try:
-                # Run pdflatex
-                result = subprocess.run([
-                    'pdflatex',
-                    '-interaction=nonstopmode',
-                    '-output-directory', str(temp_path),
-                    str(tex_file)
-                ], capture_output=True, text=True, cwd=temp_path)
-                
-                if result.returncode != 0:
-                    raise LaTeXCompilationError(f"LaTeX compilation failed: {result.stderr}")
-                
-                # Check if PDF was created
-                if not pdf_file.exists():
-                    raise LaTeXCompilationError("PDF file was not created")
-                
-                # Read PDF content
-                with open(pdf_file, 'rb') as f:
-                    pdf_content = f.read()
-                
-                # Optionally save to output path
-                if output_path:
-                    with open(output_path, 'wb') as f:
-                        f.write(pdf_content)
-                
-                return pdf_content
-                
-            except FileNotFoundError:
-                raise LaTeXCompilationError(
-                    "pdflatex not found. Please install a LaTeX distribution (e.g., TeX Live, MiKTeX)"
-                )
-            except Exception as e:
-                raise LaTeXCompilationError(f"Compilation error: {str(e)}")
+            # Run pdflatex in the temporary directory
+            result = subprocess.run([
+                pdflatex_path,
+                '-interaction=nonstopmode',
+                'resume.tex'
+            ], capture_output=True, text=True, cwd=temp_dir, timeout=30)
+            
+            if result.returncode != 0:
+                # Extract meaningful error from LaTeX log
+                error_msg = self._extract_latex_error(result.stdout, result.stderr)
+                raise LaTeXCompilationError(f"LaTeX compilation failed: {error_msg}")
+            
+            # Check if PDF was created
+            if not os.path.exists(pdf_file):
+                raise LaTeXCompilationError("PDF file was not created despite successful compilation")
+            
+            # Read PDF content
+            with open(pdf_file, 'rb') as f:
+                pdf_content = f.read()
+            
+            # Optionally save to output path
+            if output_path:
+                with open(output_path, 'wb') as f:
+                    f.write(pdf_content)
+            
+            return pdf_content
+            
+        except subprocess.TimeoutExpired:
+            raise LaTeXCompilationError("LaTeX compilation timed out (30 seconds)")
+        except Exception as e:
+            if "LaTeX compilation failed" in str(e):
+                raise  # Re-raise LaTeX compilation errors as-is
+            raise LaTeXCompilationError(f"Compilation error: {str(e)}")
+        finally:
+            # Clean up temporary directory
+            if os.path.exists(temp_dir):
+                try:
+                    shutil.rmtree(temp_dir)
+                except:
+                    pass
+    
+    def _extract_latex_error(self, stdout: str, stderr: str) -> str:
+        """
+        Extract meaningful error message from LaTeX output
+        
+        Args:
+            stdout: Standard output from pdflatex
+            stderr: Standard error from pdflatex
+            
+        Returns:
+            Cleaned error message
+        """
+        # Look for common LaTeX error patterns
+        error_patterns = [
+            "! LaTeX Error:",
+            "! Undefined control sequence",
+            "! Missing",
+            "! Package",
+            "! File",
+        ]
+        
+        combined_output = stdout + "\n" + stderr
+        lines = combined_output.split('\n')
+        
+        error_lines = []
+        for line in lines:
+            for pattern in error_patterns:
+                if pattern in line:
+                    error_lines.append(line.strip())
+                    break
+        
+        if error_lines:
+            return "; ".join(error_lines[:3])  # Return first 3 errors
+        
+        # If no specific errors found, return last few lines of stderr
+        if stderr.strip():
+            stderr_lines = [line.strip() for line in stderr.split('\n') if line.strip()]
+            return "; ".join(stderr_lines[-2:]) if stderr_lines else "Unknown compilation error"
+        
+        return "Compilation failed with unknown error"
     
     def get_resume_by_id(self, resume_id: int) -> Optional[Resume]:
         """
@@ -279,15 +400,31 @@ class ResumeService:
         Returns:
             Tuple of (is_installed, version_info)
         """
-        try:
-            result = subprocess.run(['pdflatex', '--version'], 
-                                  capture_output=True, text=True)
-            if result.returncode == 0:
-                version_line = result.stdout.split('\n')[0]
-                return True, version_line
-            else:
-                return False, "pdflatex command failed"
-        except FileNotFoundError:
-            return False, "pdflatex not found in PATH"
-        except Exception as e:
-            return False, f"Error checking LaTeX: {str(e)}"
+        # Common LaTeX installation paths on Windows
+        common_paths = [
+            'pdflatex',  # In PATH
+            r'C:\Program Files\MiKTeX\miktex\bin\x64\pdflatex.exe',
+            r'C:\Program Files (x86)\MiKTeX\miktex\bin\pdflatex.exe',
+            r'C:\texlive\2023\bin\win32\pdflatex.exe',
+            r'C:\texlive\2024\bin\win32\pdflatex.exe',
+            r'C:\texlive\2025\bin\win32\pdflatex.exe',
+            r'C:\Users\{}\AppData\Local\Programs\MiKTeX\miktex\bin\x64\pdflatex.exe'.format(os.environ.get('USERNAME', '')),
+        ]
+        
+        for pdflatex_path in common_paths:
+            try:
+                result = subprocess.run([pdflatex_path, '--version'], 
+                                      capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    version_line = result.stdout.split('\n')[0]
+                    if pdflatex_path != 'pdflatex':
+                        return True, f"{version_line} (found at: {pdflatex_path})"
+                    else:
+                        return True, version_line
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                continue
+            except Exception as e:
+                continue
+        
+        # If not found, provide installation guidance
+        return False, "pdflatex not found. Install MiKTeX or TeX Live"
