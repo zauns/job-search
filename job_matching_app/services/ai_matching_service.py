@@ -26,7 +26,6 @@ class KeywordExtractionResult:
     keywords: List[str]
     confidence: float
     language_detected: str
-    fallback_used: bool = False
 
 
 class OllamaConnectionError(Exception):
@@ -48,30 +47,14 @@ class AIMatchingService:
         self.model_name = model_name or self.settings.ollama_model
         self.client = None
         self._initialize_client()
-        
-        # Fallback keywords for different domains
-        self.fallback_keywords = {
-            'tech': [
-                'python', 'javascript', 'java', 'react', 'node.js', 'sql', 'git',
-                'docker', 'kubernetes', 'aws', 'machine learning', 'data science',
-                'web development', 'software engineering', 'api', 'database'
-            ],
-            'general': [
-                'communication', 'teamwork', 'leadership', 'problem solving',
-                'project management', 'analytical thinking', 'creativity',
-                'time management', 'adaptability', 'customer service'
-            ]
-        }
     
     def _initialize_client(self) -> None:
-        """Initialize Ollama client and check availability"""
+        """Initialize Ollama client and require availability"""
         if not OLLAMA_AVAILABLE:
-            logger.warning("Ollama library not available. Falling back to manual keyword extraction.")
-            return
+            raise OllamaConnectionError("Ollama library not available. Please install ollama package.")
         
         if not self.settings.ollama_enabled:
-            logger.info("Ollama disabled in configuration. Using fallback extraction.")
-            return
+            raise OllamaConnectionError("Ollama disabled in configuration. Please enable Ollama to use AI matching service.")
         
         try:
             # Test connection to Ollama
@@ -101,12 +84,11 @@ class AIMatchingService:
                     self.model_name = available_models[0]
                     logger.info(f"Using model: {self.model_name}")
                 else:
-                    logger.error("No models available in Ollama")
-                    self.client = None
+                    raise OllamaConnectionError("No models available in Ollama. Please ensure models are installed.")
                     
         except Exception as e:
             logger.error(f"Failed to initialize Ollama client: {e}")
-            self.client = None
+            raise OllamaConnectionError(f"Failed to initialize Ollama client: {e}")
     
     def is_ollama_available(self) -> bool:
         """Check if Ollama service is available"""
@@ -114,7 +96,7 @@ class AIMatchingService:
     
     def extract_resume_keywords(self, latex_content: str) -> KeywordExtractionResult:
         """
-        Extract keywords from LaTeX resume content
+        Extract keywords from LaTeX resume content using Ollama
         
         Args:
             latex_content: LaTeX source code of the resume
@@ -128,15 +110,8 @@ class AIMatchingService:
         # Detect language
         language = self._detect_language(clean_text)
         
-        # Try Ollama extraction first
-        if self.is_ollama_available():
-            try:
-                return self._extract_keywords_with_ollama(clean_text, language)
-            except Exception as e:
-                logger.warning(f"Ollama extraction failed: {e}. Using fallback method.")
-        
-        # Fallback to rule-based extraction
-        return self._extract_keywords_fallback(clean_text, language)
+        # Extract keywords using Ollama (required)
+        return self._extract_keywords_with_ollama(clean_text, language)
     
     def _clean_latex_content(self, latex_content: str) -> str:
         """
@@ -265,77 +240,14 @@ Maximum 15 keywords, prioritizing technical and specific terms.
             return KeywordExtractionResult(
                 keywords=keywords,
                 confidence=0.8,  # High confidence for Ollama extraction
-                language_detected=language,
-                fallback_used=False
+                language_detected=language
             )
             
         except Exception as e:
             logger.error(f"Ollama keyword extraction failed: {e}")
             raise OllamaConnectionError(f"Failed to extract keywords with Ollama: {e}")
     
-    def _extract_keywords_fallback(self, text: str, language: str) -> KeywordExtractionResult:
-        """
-        Fallback keyword extraction using rule-based approach
-        
-        Args:
-            text: Cleaned text content
-            language: Detected language
-            
-        Returns:
-            KeywordExtractionResult with extracted keywords
-        """
-        keywords = []
-        text_lower = text.lower()
-        
-        # Technical keywords patterns - more comprehensive
-        tech_patterns = [
-            r'\b(python|java|javascript|typescript|c\+\+|c#|php|ruby|go|rust|swift|kotlin|scala)\b',
-            r'\b(react|angular|vue|django|flask|spring|express|laravel|fastapi|nodejs|node\.js)\b',
-            r'\b(sql|mysql|postgresql|mongodb|redis|elasticsearch|sqlite|oracle)\b',
-            r'\b(docker|kubernetes|aws|azure|gcp|jenkins|git|github|gitlab|ci/cd|devops)\b',
-            r'\b(machine learning|data science|artificial intelligence|deep learning|ai|ml)\b',
-            r'\b(api|rest|graphql|microservices|web services|backend|frontend)\b',
-            r'\b(linux|unix|windows|macos|bash|shell|powershell)\b',
-            r'\b(html|css|sass|scss|bootstrap|tailwind)\b'
-        ]
-        
-        # Extract technical keywords using patterns
-        for pattern in tech_patterns:
-            matches = re.findall(pattern, text_lower, re.IGNORECASE)
-            keywords.extend(matches)
-        
-        # Look for specific technology mentions in the text
-        tech_keywords_to_find = [
-            'python', 'java', 'javascript', 'typescript', 'react', 'angular', 'vue',
-            'django', 'flask', 'spring', 'node.js', 'nodejs', 'express',
-            'postgresql', 'mysql', 'mongodb', 'redis', 'elasticsearch',
-            'docker', 'kubernetes', 'aws', 'azure', 'git', 'jenkins',
-            'machine learning', 'data science', 'api', 'rest', 'microservices',
-            'linux', 'html', 'css', 'bootstrap'
-        ]
-        
-        for keyword in tech_keywords_to_find:
-            if keyword in text_lower:
-                keywords.append(keyword)
-        
-        # Add domain-specific fallback keywords based on content
-        if any(word in text_lower for word in ['software', 'developer', 'engineer', 'programming', 'development']):
-            keywords.extend(self.fallback_keywords['tech'][:8])
-        
-        # Add general skills if professional content is detected
-        if any(word in text_lower for word in ['experience', 'work', 'project', 'team', 'management']):
-            keywords.extend(self.fallback_keywords['general'][:5])
-        
-        # Remove duplicates, clean, and limit
-        keywords = list(set(keywords))
-        keywords = self._clean_keywords(keywords)
-        
-        return KeywordExtractionResult(
-            keywords=keywords[:15],  # Limit to 15 keywords
-            confidence=0.5,  # Lower confidence for fallback
-            language_detected=language,
-            fallback_used=True
-        )
+
     
     def _extract_keywords_from_response(self, response_text: str) -> str:
         """
@@ -499,14 +411,13 @@ Maximum 15 keywords, prioritizing technical and specific terms.
         Get information about the current Ollama model
         
         Returns:
-            Dictionary with model information
+            Dictionary with Ollama model information
+            
+        Raises:
+            OllamaConnectionError: If Ollama service is unavailable
         """
         if not self.is_ollama_available():
-            return {
-                'status': 'unavailable',
-                'model': 'none',
-                'fallback': 'rule-based extraction'
-            }
+            raise OllamaConnectionError("Ollama service is not available. Please ensure Ollama is running and properly configured.")
         
         try:
             models = self.client.list()
@@ -531,16 +442,15 @@ Maximum 15 keywords, prioritizing technical and specific terms.
                         current_model = {'name': model_name, 'size': 'unknown'}
                     break
             
+            if not current_model:
+                raise OllamaConnectionError(f"Ollama model '{self.model_name}' not found. Please ensure the model is installed.")
+            
             return {
                 'status': 'available',
                 'model': self.model_name,
-                'size': current_model.get('size', 'unknown') if current_model else 'unknown',
-                'fallback': 'none'
+                'size': current_model.get('size', 'unknown') if current_model else 'unknown'
             }
+        except OllamaConnectionError:
+            raise
         except Exception as e:
-            return {
-                'status': 'error',
-                'model': self.model_name,
-                'error': str(e),
-                'fallback': 'rule-based extraction'
-            }
+            raise OllamaConnectionError(f"Failed to retrieve Ollama model information: {e}")

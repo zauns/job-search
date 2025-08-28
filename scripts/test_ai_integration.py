@@ -67,7 +67,6 @@ def test_ai_service():
     print("\n--- Testing Keyword Extraction ---")
     result = ai_service.extract_resume_keywords(sample_latex)
     print(f"Language detected: {result.language_detected}")
-    print(f"Fallback used: {result.fallback_used}")
     print(f"Confidence: {result.confidence}")
     print(f"Keywords: {result.keywords}")
     
@@ -102,7 +101,6 @@ def test_resume_service():
         print("\n--- Extracting Keywords with AI ---")
         result = resume_service.extract_keywords_with_ai(resume.id)
         print(f"Language detected: {result.language_detected}")
-        print(f"Fallback used: {result.fallback_used}")
         print(f"Confidence: {result.confidence}")
         print(f"Extracted keywords: {result.keywords}")
         

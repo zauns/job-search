@@ -144,7 +144,7 @@ python -m pytest tests/test_ai_matching_service.py -v
 Once Ollama is set up, the job matching application will automatically:
 1. Detect available Ollama models
 2. Use AI for keyword extraction from resumes
-3. Fall back to rule-based extraction if Ollama is unavailable
+3. Provide clear error messages if Ollama becomes unavailable
 4. Support both Portuguese and English content
 
 ### Example Usage
@@ -161,7 +161,6 @@ result = resume_service.extract_keywords_with_ai(resume.id)
 
 print(f"Keywords: {result.keywords}")
 print(f"Language: {result.language_detected}")
-print(f"AI Used: {not result.fallback_used}")
 ```
 
 ## Additional Resources
@@ -176,4 +175,4 @@ If you encounter issues:
 1. Check the troubleshooting section above
 2. Run the test script to verify functionality
 3. Check application logs for detailed error messages
-4. The application will work with fallback keyword extraction even without Ollama
+4. Ensure Ollama service is running and properly configured for full functionality

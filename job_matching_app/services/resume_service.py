@@ -181,6 +181,28 @@ class ResumeService:
                 except:
                     pass
     
+    def _find_pdflatex(self) -> Optional[str]:
+        """
+        Find pdflatex executable
+        
+        Returns:
+            Path to pdflatex executable or None if not found
+        """
+        # Common pdflatex executable names
+        executables = ['pdflatex', 'pdflatex.exe']
+        
+        # Try to find pdflatex in PATH
+        for exe in executables:
+            try:
+                result = subprocess.run(['where' if platform.system() == 'Windows' else 'which', exe], 
+                                      capture_output=True, text=True)
+                if result.returncode == 0:
+                    return exe
+            except:
+                continue
+        
+        return None
+    
     def _extract_latex_error(self, stdout: str, stderr: str) -> str:
         """
         Extract meaningful error message from LaTeX output

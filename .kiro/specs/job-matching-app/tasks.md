@@ -48,8 +48,8 @@
   - Setup Ollama client integration using ollama-python library
   - Implement keyword extraction from LaTeX resume content
   - Add multilingual support for Portuguese and English text processing
-  - Create fallback mechanism when Ollama service is unavailable
-  - Write unit tests with mocked Ollama responses
+  - Ensure robust error handling when Ollama service is unavailable
+  - Write unit tests using real Ollama service integration
   - _Requirements: 2.1, 2.4, 7.1, 7.2_
 
 - [x] 5. Implement keyword management interface
@@ -69,7 +69,7 @@
   - Create scrapers for Indeed and LinkedIn job listings
   - Add data normalization and cleaning for consistent job data structure
   - Implement rate limiting and error handling for scraping failures
-  - Write unit tests with mock HTML responses
+  - Write unit tests with sample HTML response fixtures
   - _Requirements: 6.1, 6.2, 6.3, 6.4_
 
 - [ ] 7. Develop job matching and ranking algorithm
@@ -106,7 +106,7 @@
 
 - [ ] 11. Implement comprehensive error handling
   - Add robust error handling for web scraping failures and site unavailability
-  - Implement fallback mechanisms for Ollama service interruptions
+  - Implement clear error reporting when Ollama service is unavailable
   - Create detailed error messages for LaTeX compilation failures
   - Add database connection error handling with retry logic
   - Write unit tests for all error scenarios and recovery mechanisms

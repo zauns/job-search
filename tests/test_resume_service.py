@@ -136,6 +136,7 @@ class TestResumeUpload:
 class TestLaTeXCompilation:
     """Test LaTeX compilation functionality"""
     
+    @patch('job_matching_app.services.resume_service.ResumeService._find_pdflatex')
     @patch('subprocess.run')
     @patch('os.path.exists')
     @patch('builtins.open', create=True)
@@ -158,6 +159,7 @@ class TestLaTeXCompilation:
         assert isinstance(pdf_content, bytes)
         assert pdf_content == b"PDF content"
     
+    @patch('job_matching_app.services.resume_service.ResumeService._find_pdflatex')
     @patch('subprocess.run')
     @patch('builtins.open', create=True)
     @patch('os.makedirs')
@@ -178,6 +180,7 @@ class TestLaTeXCompilation:
         
         mock_find_pdflatex.assert_called_once()
     
+    @patch('job_matching_app.services.resume_service.ResumeService._find_pdflatex')
     @patch('subprocess.run')
     @patch('os.path.exists')
     @patch('builtins.open', create=True)

@@ -241,7 +241,6 @@ def extract_keywords(resume_id):
         console.print(f"[green]✓[/green] Keywords extracted successfully!")
         console.print(f"• Language detected: {result.language_detected}")
         console.print(f"• Confidence: {result.confidence:.2f}")
-        console.print(f"• Fallback used: {'Yes' if result.fallback_used else 'No'}")
         console.print(f"• Keywords found: {len(result.keywords)}")
         
         if result.keywords:
@@ -334,7 +333,6 @@ def _extract_keywords_interactive(resume_service, resume_obj):
         console.print(f"[green]✓[/green] Keywords extracted!")
         console.print(f"• Language: {result.language_detected}")
         console.print(f"• Confidence: {result.confidence:.2f}")
-        console.print(f"• Fallback: {'Yes' if result.fallback_used else 'No'}")
         console.print(f"• Found: {len(result.keywords)} keywords")
         
         if result.keywords:

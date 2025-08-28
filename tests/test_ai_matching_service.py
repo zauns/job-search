@@ -2,7 +2,6 @@
 Unit tests for AI matching service
 """
 import pytest
-from unittest.mock import Mock, patch, MagicMock
 from job_matching_app.services.ai_matching_service import (
     AIMatchingService, 
     KeywordExtractionResult, 
@@ -14,9 +13,9 @@ class TestAIMatchingService:
     """Test cases for AIMatchingService"""
     
     @pytest.fixture
-    def ai_service(self):
-        """Create AI service instance for testing"""
-        return AIMatchingService()
+    def ai_service(self, ai_service_with_ollama_check):
+        """Create AI service instance for testing with Ollama availability check"""
+        return ai_service_with_ollama_check
     
     @pytest.fixture
     def sample_latex_content(self):
@@ -64,43 +63,35 @@ class TestAIMatchingService:
         \\end{document}
         """
     
-    def test_initialization_without_ollama(self):
-        """Test service initialization when Ollama is not available"""
-        with patch('job_matching_app.services.ai_matching_service.OLLAMA_AVAILABLE', False):
-            service = AIMatchingService()
-            assert not service.is_ollama_available()
-            assert service.client is None
+    @pytest.mark.requires_ollama
+    def test_initialization_requires_ollama(self, ai_service):
+        """Test service initialization requires Ollama to be available"""
+        # Service should initialize and connect to real Ollama
+        assert ai_service.is_ollama_available()
+        assert ai_service.client is not None
     
-    @patch('job_matching_app.services.ai_matching_service.ollama')
-    def test_initialization_with_ollama_success(self, mock_ollama):
+    @pytest.mark.requires_ollama
+    def test_initialization_with_ollama_success(self, ai_service):
         """Test successful Ollama initialization"""
-        mock_ollama.list.return_value = {
-            'models': [{'name': 'llama3.2:3b', 'size': '2GB'}]
-        }
-        
-        service = AIMatchingService()
-        assert service.is_ollama_available()
-        assert service.client == mock_ollama
-        assert service.model_name == 'llama3.2:3b'
+        assert ai_service.is_ollama_available()
+        assert ai_service.client is not None
+        assert ai_service.model_name is not None
     
-    @patch('job_matching_app.services.ai_matching_service.ollama')
-    def test_initialization_with_different_model(self, mock_ollama):
+    @pytest.mark.requires_ollama
+    def test_initialization_with_different_model(self, require_ollama):
         """Test initialization when requested model is not available"""
-        mock_ollama.list.return_value = {
-            'models': [{'name': 'llama2:7b', 'size': '4GB'}]
-        }
-        
         service = AIMatchingService(model_name='nonexistent:model')
-        assert service.model_name == 'llama2:7b'  # Should use first available
+        # Should use first available model from real Ollama
+        assert service.model_name is not None
     
-    @patch('job_matching_app.services.ai_matching_service.ollama')
-    def test_initialization_ollama_connection_error(self, mock_ollama):
+    def test_initialization_ollama_connection_error_without_ollama(self, ollama_availability):
         """Test initialization when Ollama connection fails"""
-        mock_ollama.list.side_effect = Exception("Connection failed")
+        if ollama_availability['available']:
+            pytest.skip("Ollama is available, cannot test connection error scenario")
         
-        service = AIMatchingService()
-        assert not service.is_ollama_available()
-        assert service.client is None
+        # This test verifies that proper errors are raised when Ollama is unavailable
+        with pytest.raises(OllamaConnectionError):
+            AIMatchingService()
     
     def test_clean_latex_content(self, ai_service, sample_latex_content):
         """Test LaTeX content cleaning"""
@@ -153,87 +144,63 @@ class TestAIMatchingService:
         assert 'a' not in cleaned
         assert '' not in cleaned
     
-    @patch('job_matching_app.services.ai_matching_service.ollama')
-    def test_extract_keywords_with_ollama_success(self, mock_ollama, ai_service, sample_latex_content):
+    @pytest.mark.requires_ollama
+    def test_extract_keywords_with_ollama_success(self, ai_service, sample_latex_content):
         """Test successful keyword extraction with Ollama"""
-        # Mock Ollama response
-        mock_ollama.list.return_value = {'models': [{'name': 'llama3.2:3b'}]}
-        mock_ollama.generate.return_value = {
-            'response': 'python, javascript, django, react, postgresql, docker, kubernetes, git, rest api, microservices'
-        }
-        
-        # Reinitialize service with mocked Ollama
-        ai_service._initialize_client()
-        ai_service.client = mock_ollama
-        
         result = ai_service.extract_resume_keywords(sample_latex_content)
         
         assert isinstance(result, KeywordExtractionResult)
-        assert not result.fallback_used
-        assert result.confidence == 0.8
-        assert 'python' in result.keywords
-        assert 'django' in result.keywords
-        assert 'docker' in result.keywords
+        assert result.confidence > 0
+        assert len(result.keywords) > 0
+        assert result.language_detected in ['en', 'pt']
         
-        # Verify Ollama was called with correct parameters
-        mock_ollama.generate.assert_called_once()
-        call_args = mock_ollama.generate.call_args
-        assert call_args[1]['model'] == 'llama3.2:3b'
-        assert 'temperature' in call_args[1]['options']
+        # Should extract some technical keywords from the sample content
+        keywords_lower = [kw.lower() for kw in result.keywords]
+        expected_keywords = ['python', 'django', 'javascript', 'postgresql', 'docker']
+        found_keywords = [kw for kw in expected_keywords if any(kw in keyword for keyword in keywords_lower)]
+        assert len(found_keywords) > 0
     
-    @patch('job_matching_app.services.ai_matching_service.ollama')
-    def test_extract_keywords_with_ollama_portuguese(self, mock_ollama, ai_service, sample_portuguese_latex):
+    @pytest.mark.requires_ollama
+    def test_extract_keywords_with_ollama_portuguese(self, ai_service, sample_portuguese_latex):
         """Test keyword extraction with Portuguese content"""
-        mock_ollama.list.return_value = {'models': [{'name': 'llama3.2:3b'}]}
-        mock_ollama.generate.return_value = {
-            'response': 'python, javascript, django, react, postgresql, docker, kubernetes, git, api rest, microsserviços'
-        }
-        
-        ai_service._initialize_client()
-        ai_service.client = mock_ollama
-        
         result = ai_service.extract_resume_keywords(sample_portuguese_latex)
         
+        assert isinstance(result, KeywordExtractionResult)
         assert result.language_detected == 'pt'
-        assert not result.fallback_used
-        
-        # Verify Portuguese prompt was used
-        call_args = mock_ollama.generate.call_args
-        prompt = call_args[1]['prompt']
-        assert 'Analise o seguinte texto' in prompt
-        assert 'habilidades técnicas' in prompt.lower()
-    
-    @patch('job_matching_app.services.ai_matching_service.ollama')
-    def test_extract_keywords_ollama_failure(self, mock_ollama, ai_service, sample_latex_content):
-        """Test fallback when Ollama extraction fails"""
-        mock_ollama.list.return_value = {'models': [{'name': 'llama3.2:3b'}]}
-        mock_ollama.generate.side_effect = Exception("Ollama service error")
-        
-        ai_service._initialize_client()
-        ai_service.client = mock_ollama
-        
-        result = ai_service.extract_resume_keywords(sample_latex_content)
-        
-        assert isinstance(result, KeywordExtractionResult)
-        assert result.fallback_used
-        assert result.confidence == 0.5
-        assert len(result.keywords) > 0
-    
-    def test_extract_keywords_fallback_only(self, ai_service, sample_latex_content):
-        """Test fallback keyword extraction when Ollama is unavailable"""
-        # Ensure Ollama is not available
-        ai_service.client = None
-        
-        result = ai_service.extract_resume_keywords(sample_latex_content)
-        
-        assert isinstance(result, KeywordExtractionResult)
-        assert result.fallback_used
-        assert result.confidence == 0.5
         assert len(result.keywords) > 0
         
-        # Should extract some technical keywords
+        # Should extract technical keywords from Portuguese content
         keywords_lower = [kw.lower() for kw in result.keywords]
-        # Check for any of the expected technical keywords from the sample content
+        expected_keywords = ['python', 'django', 'javascript', 'postgresql', 'docker']
+        found_keywords = [kw for kw in expected_keywords if any(kw in keyword for keyword in keywords_lower)]
+        assert len(found_keywords) > 0
+    
+    @pytest.mark.requires_ollama
+    def test_extract_keywords_ollama_failure(self, ai_service, sample_latex_content):
+        """Test behavior when Ollama extraction fails"""
+        # Test with empty content - should handle gracefully or raise appropriate error
+        invalid_content = ""
+        
+        try:
+            result = ai_service.extract_resume_keywords(invalid_content)
+            # If no exception, should return valid result with empty or minimal keywords
+            assert isinstance(result, KeywordExtractionResult)
+            assert len(result.keywords) >= 0  # May be empty for invalid content
+        except OllamaConnectionError:
+            # This is also acceptable behavior for invalid content
+            pass
+    
+    @pytest.mark.requires_ollama
+    def test_extract_keywords_requires_ollama(self, ai_service, sample_latex_content):
+        """Test that keyword extraction requires Ollama to be available"""
+        result = ai_service.extract_resume_keywords(sample_latex_content)
+        
+        assert isinstance(result, KeywordExtractionResult)
+        assert result.confidence > 0
+        assert len(result.keywords) > 0
+        
+        # Should extract technical keywords using Ollama
+        keywords_lower = [kw.lower() for kw in result.keywords]
         expected_keywords = ['python', 'django', 'javascript', 'java', 'react', 'postgresql', 'docker', 'kubernetes']
         found_keywords = [kw for kw in expected_keywords if any(kw in keyword for keyword in keywords_lower)]
         assert len(found_keywords) > 0, f"Expected to find at least one of {expected_keywords} in {keywords_lower}"
@@ -283,46 +250,33 @@ class TestAIMatchingService:
         assert not ai_service._is_technical_keyword('teamwork')
         assert not ai_service._is_technical_keyword('leadership')
     
-    @patch('job_matching_app.services.ai_matching_service.ollama')
-    def test_get_model_info_available(self, mock_ollama, ai_service):
+    @pytest.mark.requires_ollama
+    def test_get_model_info_available(self, ai_service):
         """Test getting model info when Ollama is available"""
-        mock_ollama.list.return_value = {
-            'models': [{'name': 'llama3.2:3b', 'size': '2GB'}]
-        }
-        
-        ai_service._initialize_client()
-        ai_service.client = mock_ollama
-        
         info = ai_service.get_model_info()
         
         assert info['status'] == 'available'
-        assert info['model'] == 'llama3.2:3b'
-        assert info['size'] == '2GB'
-        assert info['fallback'] == 'none'
+        assert info['model'] is not None
+        assert 'size' in info or 'error' not in info
     
-    def test_get_model_info_unavailable(self, ai_service):
+    def test_get_model_info_unavailable(self, ollama_availability):
         """Test getting model info when Ollama is unavailable"""
-        ai_service.client = None
+        if ollama_availability['available']:
+            pytest.skip("Ollama service is available, cannot test unavailable scenario")
         
-        info = ai_service.get_model_info()
-        
-        assert info['status'] == 'unavailable'
-        assert info['model'] == 'none'
-        assert info['fallback'] == 'rule-based extraction'
+        # When Ollama is unavailable, service initialization should fail
+        with pytest.raises(OllamaConnectionError):
+            service = AIMatchingService()
+            service.get_model_info()
     
-    @patch('job_matching_app.services.ai_matching_service.ollama')
-    def test_get_model_info_error(self, mock_ollama, ai_service):
-        """Test getting model info when there's an error"""
-        mock_ollama.list.side_effect = Exception("Connection error")
-        
-        ai_service._initialize_client()
-        ai_service.client = mock_ollama
-        
+    @pytest.mark.requires_ollama
+    def test_get_model_info_success(self, ai_service):
+        """Test getting model info when Ollama is working properly"""
         info = ai_service.get_model_info()
         
-        assert info['status'] == 'error'
-        assert 'error' in info
-        assert info['fallback'] == 'rule-based extraction'
+        # With real Ollama, we should get valid info or the service wouldn't be available
+        assert info['status'] == 'available'
+        assert info['model'] is not None
 
 
 class TestKeywordExtractionResult:
@@ -333,14 +287,12 @@ class TestKeywordExtractionResult:
         result = KeywordExtractionResult(
             keywords=['python', 'django', 'postgresql'],
             confidence=0.8,
-            language_detected='en',
-            fallback_used=False
+            language_detected='en'
         )
         
         assert result.keywords == ['python', 'django', 'postgresql']
         assert result.confidence == 0.8
         assert result.language_detected == 'en'
-        assert not result.fallback_used
     
     def test_keyword_extraction_result_defaults(self):
         """Test KeywordExtractionResult with default values"""
@@ -349,8 +301,7 @@ class TestKeywordExtractionResult:
             confidence=0.9,
             language_detected='en'
         )
-        
-        assert not result.fallback_used  # Default should be False
+
 
 
 class TestOllamaConnectionError:

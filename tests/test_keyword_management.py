@@ -244,8 +244,7 @@ Databases: PostgreSQL, MongoDB
         mock_result = KeywordExtractionResult(
             keywords=["python", "django", "react", "postgresql"],
             confidence=0.85,
-            language_detected="en",
-            fallback_used=False
+            language_detected="en"
         )
         mock_extract.return_value = mock_result
         
@@ -255,7 +254,6 @@ Databases: PostgreSQL, MongoDB
         assert result.keywords == mock_result.keywords
         assert result.confidence == mock_result.confidence
         assert result.language_detected == mock_result.language_detected
-        assert result.fallback_used is False
         
         # Verify keywords were saved to database
         updated_resume = resume_service.get_resume_by_id(sample_resume.id)
@@ -268,15 +266,13 @@ Databases: PostgreSQL, MongoDB
         mock_result = KeywordExtractionResult(
             keywords=["python", "programming", "software"],
             confidence=0.5,
-            language_detected="en",
-            fallback_used=True
+            language_detected="en"
         )
         mock_extract.return_value = mock_result
         
         # Extract keywords
         result = resume_service.extract_keywords_with_ai(sample_resume.id)
         
-        assert result.fallback_used is True
         assert result.confidence == 0.5
         assert len(result.keywords) > 0
     

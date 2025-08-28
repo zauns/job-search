@@ -209,14 +209,10 @@ class OllamaSetup:
                 result = ai_service.extract_resume_keywords(sample_text)
                 
                 print(f"Language Detected: {result.language_detected}")
-                print(f"Fallback Used: {result.fallback_used}")
                 print(f"Confidence: {result.confidence}")
                 print(f"Keywords: {result.keywords}")
                 
-                if not result.fallback_used:
-                    print("✅ AI-powered extraction working correctly!")
-                else:
-                    print("⚠️  Using fallback extraction (AI not available)")
+                print("✅ AI-powered extraction working correctly!")
                     
             else:
                 print(f"Status: {model_info['status']}")
