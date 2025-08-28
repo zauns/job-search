@@ -176,6 +176,231 @@ def show_resume(resume_id):
             console.print(f"  • {keyword}")
 
 
+@resume.command("keywords")
+@click.argument("resume_id", type=int)
+def manage_keywords(resume_id):
+    """Manage keywords for a resume (interactive mode)"""
+    resume_service = ResumeService()
+    
+    # Get resume
+    resume_obj = resume_service.get_resume_by_id(resume_id)
+    if not resume_obj:
+        console.print(f"[red]Error:[/red] Resume with ID {resume_id} not found")
+        return
+    
+    console.print(f"\n[bold]Keyword Management for Resume: {resume_obj.filename}[/bold]")
+    
+    while True:
+        # Display current keywords
+        _display_keywords(resume_obj)
+        
+        # Show menu
+        console.print("\n[bold]Options:[/bold]")
+        console.print("1. Extract keywords with AI")
+        console.print("2. Add keyword")
+        console.print("3. Remove keyword")
+        console.print("4. Clear user keywords")
+        console.print("5. Exit")
+        
+        choice = click.prompt("\nSelect option", type=int, default=5)
+        
+        if choice == 1:
+            _extract_keywords_interactive(resume_service, resume_obj)
+        elif choice == 2:
+            _add_keyword_interactive(resume_service, resume_obj)
+        elif choice == 3:
+            _remove_keyword_interactive(resume_service, resume_obj)
+        elif choice == 4:
+            _clear_user_keywords_interactive(resume_service, resume_obj)
+        elif choice == 5:
+            console.print("[green]Keyword management completed.[/green]")
+            break
+        else:
+            console.print("[red]Invalid option. Please try again.[/red]")
+        
+        # Refresh resume object to get updated keywords
+        resume_obj = resume_service.get_resume_by_id(resume_id)
+
+
+@resume.command("extract-keywords")
+@click.argument("resume_id", type=int)
+def extract_keywords(resume_id):
+    """Extract keywords from resume using AI"""
+    resume_service = ResumeService()
+    
+    # Get resume
+    resume_obj = resume_service.get_resume_by_id(resume_id)
+    if not resume_obj:
+        console.print(f"[red]Error:[/red] Resume with ID {resume_id} not found")
+        return
+    
+    try:
+        with console.status("[bold green]Extracting keywords with AI..."):
+            result = resume_service.extract_keywords_with_ai(resume_id)
+        
+        console.print(f"[green]✓[/green] Keywords extracted successfully!")
+        console.print(f"• Language detected: {result.language_detected}")
+        console.print(f"• Confidence: {result.confidence:.2f}")
+        console.print(f"• Fallback used: {'Yes' if result.fallback_used else 'No'}")
+        console.print(f"• Keywords found: {len(result.keywords)}")
+        
+        if result.keywords:
+            console.print("\n[bold]Extracted Keywords:[/bold]")
+            for keyword in result.keywords:
+                console.print(f"  • {keyword}")
+        
+    except Exception as e:
+        console.print(f"[red]Error extracting keywords:[/red] {e}")
+
+
+@resume.command("add-keyword")
+@click.argument("resume_id", type=int)
+@click.argument("keyword")
+def add_keyword(resume_id, keyword):
+    """Add a keyword to resume"""
+    resume_service = ResumeService()
+    
+    # Get resume
+    resume_obj = resume_service.get_resume_by_id(resume_id)
+    if not resume_obj:
+        console.print(f"[red]Error:[/red] Resume with ID {resume_id} not found")
+        return
+    
+    success = resume_service.add_user_keyword(resume_id, keyword)
+    if success:
+        console.print(f"[green]✓[/green] Keyword '{keyword}' added successfully")
+    else:
+        console.print(f"[yellow]Keyword '{keyword}' already exists[/yellow]")
+
+
+@resume.command("remove-keyword")
+@click.argument("resume_id", type=int)
+@click.argument("keyword")
+def remove_keyword(resume_id, keyword):
+    """Remove a keyword from resume"""
+    resume_service = ResumeService()
+    
+    # Get resume
+    resume_obj = resume_service.get_resume_by_id(resume_id)
+    if not resume_obj:
+        console.print(f"[red]Error:[/red] Resume with ID {resume_id} not found")
+        return
+    
+    success = resume_service.remove_user_keyword(resume_id, keyword)
+    if success:
+        console.print(f"[green]✓[/green] Keyword '{keyword}' removed successfully")
+    else:
+        console.print(f"[yellow]Keyword '{keyword}' not found in user keywords[/yellow]")
+
+
+def _display_keywords(resume_obj):
+    """Display keywords in a formatted table"""
+    table = Table(title=f"Keywords for {resume_obj.filename}")
+    table.add_column("Type", style="cyan", no_wrap=True)
+    table.add_column("Keywords", style="green")
+    table.add_column("Count", justify="right", style="blue")
+    
+    # AI-extracted keywords
+    if resume_obj.extracted_keywords:
+        extracted_text = ", ".join(resume_obj.extracted_keywords)
+        table.add_row("AI Extracted", extracted_text, str(len(resume_obj.extracted_keywords)))
+    else:
+        table.add_row("AI Extracted", "[dim]No keywords extracted[/dim]", "0")
+    
+    # User keywords
+    if resume_obj.user_keywords:
+        user_text = ", ".join(resume_obj.user_keywords)
+        table.add_row("User Added", user_text, str(len(resume_obj.user_keywords)))
+    else:
+        table.add_row("User Added", "[dim]No user keywords[/dim]", "0")
+    
+    # Total
+    all_keywords = resume_obj.all_keywords
+    if all_keywords:
+        total_text = ", ".join(sorted(all_keywords))
+        table.add_row("Total Unique", total_text, str(len(all_keywords)))
+    else:
+        table.add_row("Total Unique", "[dim]No keywords[/dim]", "0")
+    
+    console.print(table)
+
+
+def _extract_keywords_interactive(resume_service, resume_obj):
+    """Interactive keyword extraction"""
+    try:
+        with console.status("[bold green]Extracting keywords with AI..."):
+            result = resume_service.extract_keywords_with_ai(resume_obj.id)
+        
+        console.print(f"[green]✓[/green] Keywords extracted!")
+        console.print(f"• Language: {result.language_detected}")
+        console.print(f"• Confidence: {result.confidence:.2f}")
+        console.print(f"• Fallback: {'Yes' if result.fallback_used else 'No'}")
+        console.print(f"• Found: {len(result.keywords)} keywords")
+        
+        if result.keywords:
+            console.print("\n[bold]New Keywords:[/bold]")
+            for keyword in result.keywords:
+                console.print(f"  • {keyword}")
+        
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+
+
+def _add_keyword_interactive(resume_service, resume_obj):
+    """Interactive keyword addition"""
+    keyword = click.prompt("Enter keyword to add").strip()
+    if not keyword:
+        console.print("[red]Keyword cannot be empty[/red]")
+        return
+    
+    success = resume_service.add_user_keyword(resume_obj.id, keyword)
+    if success:
+        console.print(f"[green]✓[/green] Added keyword: '{keyword}'")
+    else:
+        console.print(f"[yellow]Keyword '{keyword}' already exists[/yellow]")
+
+
+def _remove_keyword_interactive(resume_service, resume_obj):
+    """Interactive keyword removal"""
+    if not resume_obj.user_keywords:
+        console.print("[yellow]No user keywords to remove[/yellow]")
+        return
+    
+    console.print("\n[bold]User Keywords:[/bold]")
+    for i, keyword in enumerate(resume_obj.user_keywords, 1):
+        console.print(f"{i}. {keyword}")
+    
+    try:
+        choice = click.prompt("Enter number to remove (or 0 to cancel)", type=int)
+        if choice == 0:
+            return
+        if 1 <= choice <= len(resume_obj.user_keywords):
+            keyword = resume_obj.user_keywords[choice - 1]
+            success = resume_service.remove_user_keyword(resume_obj.id, keyword)
+            if success:
+                console.print(f"[green]✓[/green] Removed keyword: '{keyword}'")
+            else:
+                console.print(f"[red]Failed to remove keyword: '{keyword}'[/red]")
+        else:
+            console.print("[red]Invalid selection[/red]")
+    except (ValueError, click.Abort):
+        console.print("[yellow]Operation cancelled[/yellow]")
+
+
+def _clear_user_keywords_interactive(resume_service, resume_obj):
+    """Interactive user keywords clearing"""
+    if not resume_obj.user_keywords:
+        console.print("[yellow]No user keywords to clear[/yellow]")
+        return
+    
+    if click.confirm(f"Clear all {len(resume_obj.user_keywords)} user keywords?"):
+        success = resume_service.clear_user_keywords(resume_obj.id)
+        if success:
+            console.print("[green]✓[/green] All user keywords cleared")
+        else:
+            console.print("[red]Failed to clear keywords[/red]")
+
+
 @main.command("check-latex")
 def check_latex():
     """Check LaTeX installation"""

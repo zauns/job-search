@@ -393,6 +393,97 @@ class ResumeService:
         """
         return self.ai_service.get_model_info()
     
+    def add_user_keyword(self, resume_id: int, keyword: str) -> bool:
+        """
+        Add a user-defined keyword to a resume
+        
+        Args:
+            resume_id: Resume ID
+            keyword: Keyword to add
+            
+        Returns:
+            bool: True if keyword was added, False if it already exists
+        """
+        keyword = keyword.strip().lower()
+        if not keyword:
+            return False
+        
+        with get_db_context() as db:
+            resume = db.query(Resume).filter(Resume.id == resume_id).first()
+            if not resume:
+                return False
+            
+            # Check if keyword already exists in user keywords or extracted keywords
+            if keyword in resume.user_keywords or keyword in resume.extracted_keywords:
+                return False
+            
+            # Add keyword
+            resume.add_user_keyword(keyword)
+            return True
+    
+    def remove_user_keyword(self, resume_id: int, keyword: str) -> bool:
+        """
+        Remove a user-defined keyword from a resume
+        
+        Args:
+            resume_id: Resume ID
+            keyword: Keyword to remove
+            
+        Returns:
+            bool: True if keyword was removed, False if not found
+        """
+        keyword = keyword.strip().lower()
+        
+        with get_db_context() as db:
+            resume = db.query(Resume).filter(Resume.id == resume_id).first()
+            if not resume:
+                return False
+            
+            if keyword not in resume.user_keywords:
+                return False
+            
+            # Remove keyword
+            resume.remove_user_keyword(keyword)
+            return True
+    
+    def clear_user_keywords(self, resume_id: int) -> bool:
+        """
+        Clear all user-defined keywords from a resume
+        
+        Args:
+            resume_id: Resume ID
+            
+        Returns:
+            bool: True if successful
+        """
+        with get_db_context() as db:
+            resume = db.query(Resume).filter(Resume.id == resume_id).first()
+            if not resume:
+                return False
+            
+            resume.user_keywords = []
+            return True
+    
+    def get_resume_keywords(self, resume_id: int) -> dict:
+        """
+        Get all keywords for a resume
+        
+        Args:
+            resume_id: Resume ID
+            
+        Returns:
+            Dictionary with extracted_keywords, user_keywords, and all_keywords
+        """
+        resume = self.get_resume_by_id(resume_id)
+        if not resume:
+            return {}
+        
+        return {
+            'extracted_keywords': resume.extracted_keywords,
+            'user_keywords': resume.user_keywords,
+            'all_keywords': resume.all_keywords
+        }
+    
     def check_latex_installation(self) -> Tuple[bool, str]:
         """
         Check if LaTeX is properly installed
