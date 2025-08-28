@@ -136,7 +136,6 @@ class TestResumeUpload:
 class TestLaTeXCompilation:
     """Test LaTeX compilation functionality"""
     
-    @patch('job_matching_app.services.resume_service.ResumeService._find_pdflatex')
     @patch('subprocess.run')
     @patch('os.path.exists')
     @patch('builtins.open', create=True)
@@ -159,7 +158,6 @@ class TestLaTeXCompilation:
         assert isinstance(pdf_content, bytes)
         assert pdf_content == b"PDF content"
     
-    @patch('job_matching_app.services.resume_service.ResumeService._find_pdflatex')
     @patch('subprocess.run')
     @patch('builtins.open', create=True)
     @patch('os.makedirs')
@@ -180,16 +178,6 @@ class TestLaTeXCompilation:
         
         mock_find_pdflatex.assert_called_once()
     
-    @patch('job_matching_app.services.resume_service.ResumeService._find_pdflatex')
-    def test_compile_pdflatex_not_found(self, mock_find_pdflatex, resume_service, valid_latex_content):
-        """Test compilation when pdflatex is not installed"""
-        # Mock pdflatex not found
-        mock_find_pdflatex.return_value = None
-        
-        with pytest.raises(LaTeXCompilationError, match="pdflatex not found"):
-            resume_service.compile_to_pdf(valid_latex_content)
-    
-    @patch('job_matching_app.services.resume_service.ResumeService._find_pdflatex')
     @patch('subprocess.run')
     @patch('os.path.exists')
     @patch('builtins.open', create=True)
@@ -285,40 +273,3 @@ class TestResumeManagement:
         """Test deleting non-existent resume"""
         success = resume_service.delete_resume(99999)
         assert not success
-
-
-class TestLaTeXInstallationCheck:
-    """Test LaTeX installation checking"""
-    
-    @patch('subprocess.run')
-    def test_latex_installed(self, mock_run, resume_service):
-        """Test when LaTeX is properly installed"""
-        mock_run.return_value = MagicMock(
-            returncode=0, 
-            stdout="pdfTeX 3.14159265-2.6-1.40.21 (TeX Live 2020)"
-        )
-        
-        is_installed, version_info = resume_service.check_latex_installation()
-        
-        assert is_installed
-        assert "pdfTeX" in version_info
-    
-    @patch('subprocess.run')
-    def test_latex_not_installed(self, mock_run, resume_service):
-        """Test when LaTeX is not installed"""
-        mock_run.side_effect = FileNotFoundError()
-        
-        is_installed, version_info = resume_service.check_latex_installation()
-        
-        assert not is_installed
-        assert "not found" in version_info
-    
-    @patch('subprocess.run')
-    def test_latex_command_failed(self, mock_run, resume_service):
-        """Test when LaTeX command fails"""
-        mock_run.return_value = MagicMock(returncode=1)
-        
-        is_installed, version_info = resume_service.check_latex_installation()
-        
-        assert not is_installed
-        assert "pdflatex not found" in version_info

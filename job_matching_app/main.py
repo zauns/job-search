@@ -401,21 +401,5 @@ def _clear_user_keywords_interactive(resume_service, resume_obj):
             console.print("[red]Failed to clear keywords[/red]")
 
 
-@main.command("check-latex")
-def check_latex():
-    """Check LaTeX installation"""
-    resume_service = ResumeService()
-    latex_installed, latex_info = resume_service.check_latex_installation()
-    
-    if latex_installed:
-        console.print(f"[green]✓ LaTeX is installed:[/green] {latex_info}")
-    else:
-        console.print(f"[red]✗ LaTeX not available:[/red] {latex_info}")
-        console.print("\n[yellow]To install LaTeX:[/yellow]")
-        console.print("• Windows: Install MiKTeX or TeX Live")
-        console.print("• macOS: Install MacTeX")
-        console.print("• Linux: Install texlive-full package")
-
-
 if __name__ == "__main__":
     main()

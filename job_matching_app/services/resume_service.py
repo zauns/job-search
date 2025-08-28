@@ -98,58 +98,6 @@ class ResumeService:
         """
         return validate_latex_content(content)
     
-    def _find_pdflatex(self) -> Optional[str]:
-        """
-        Find pdflatex executable in common locations
-        
-        Returns:
-            Path to pdflatex executable or None if not found
-        """
-        common_paths = [
-            'pdflatex',  # In PATH
-            r'C:\Program Files\MiKTeX\miktex\bin\x64\pdflatex.exe',
-            r'C:\Program Files (x86)\MiKTeX\miktex\bin\pdflatex.exe',
-            r'C:\texlive\2023\bin\win32\pdflatex.exe',
-            r'C:\texlive\2024\bin\win32\pdflatex.exe',
-            r'C:\texlive\2025\bin\win32\pdflatex.exe',
-            r'C:\Users\{}\AppData\Local\Programs\MiKTeX\miktex\bin\x64\pdflatex.exe'.format(os.environ.get('USERNAME', '')),
-        ]
-        
-        for pdflatex_path in common_paths:
-            try:
-                result = subprocess.run([pdflatex_path, '--version'], 
-                                      capture_output=True, text=True, timeout=5)
-                if result.returncode == 0:
-                    return pdflatex_path
-            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-                continue
-            except Exception:
-                continue
-        
-        return None
-    
-    def _check_miktex_updates(self) -> bool:
-        """
-        Check for MiKTeX updates to avoid compilation warnings
-        
-        Returns:
-            bool: True if check was successful
-        """
-        try:
-            # Try to run MiKTeX update check
-            result = subprocess.run(['miktex', 'packages', 'check-update'], 
-                                  capture_output=True, text=True, timeout=30)
-            return True
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            # If MiKTeX console is not available, try alternative
-            try:
-                result = subprocess.run(['mpm', '--check-update'], 
-                                      capture_output=True, text=True, timeout=30)
-                return True
-            except:
-                return False
-        except Exception:
-            return False
 
     def compile_to_pdf(self, latex_content: str, output_path: Optional[str] = None) -> bytes:
         """
@@ -484,38 +432,3 @@ class ResumeService:
             'all_keywords': resume.all_keywords
         }
     
-    def check_latex_installation(self) -> Tuple[bool, str]:
-        """
-        Check if LaTeX is properly installed
-        
-        Returns:
-            Tuple of (is_installed, version_info)
-        """
-        # Common LaTeX installation paths on Windows
-        common_paths = [
-            'pdflatex',  # In PATH
-            r'C:\Program Files\MiKTeX\miktex\bin\x64\pdflatex.exe',
-            r'C:\Program Files (x86)\MiKTeX\miktex\bin\pdflatex.exe',
-            r'C:\texlive\2023\bin\win32\pdflatex.exe',
-            r'C:\texlive\2024\bin\win32\pdflatex.exe',
-            r'C:\texlive\2025\bin\win32\pdflatex.exe',
-            r'C:\Users\{}\AppData\Local\Programs\MiKTeX\miktex\bin\x64\pdflatex.exe'.format(os.environ.get('USERNAME', '')),
-        ]
-        
-        for pdflatex_path in common_paths:
-            try:
-                result = subprocess.run([pdflatex_path, '--version'], 
-                                      capture_output=True, text=True, timeout=10)
-                if result.returncode == 0:
-                    version_line = result.stdout.split('\n')[0]
-                    if pdflatex_path != 'pdflatex':
-                        return True, f"{version_line} (found at: {pdflatex_path})"
-                    else:
-                        return True, version_line
-            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-                continue
-            except Exception as e:
-                continue
-        
-        # If not found, provide installation guidance
-        return False, "pdflatex not found. Install MiKTeX or TeX Live"
