@@ -740,3 +740,195 @@ Maximum 15 keywords, prioritizing technical and specific terms.
             raise
         except Exception as e:
             raise OllamaConnectionError(f"Failed to retrieve Ollama model information: {e}")
+    
+    def adapt_resume_content(self, original_latex: str, job_data: dict) -> str:
+        """
+        Adapt resume LaTeX content for a specific job using Ollama
+        
+        Args:
+            original_latex: Original LaTeX resume content
+            job_data: Dictionary with job information (title, company, description, technologies, etc.)
+            
+        Returns:
+            Adapted LaTeX content
+            
+        Raises:
+            OllamaConnectionError: If Ollama service is unavailable
+        """
+        if not self.is_ollama_available():
+            raise OllamaConnectionError("Ollama service is not available for resume adaptation")
+        
+        # Extract key information from job data
+        job_title = job_data.get('title', '')
+        job_company = job_data.get('company', '')
+        job_description = job_data.get('description', '')
+        job_technologies = job_data.get('technologies', [])
+        experience_level = job_data.get('experience_level', '')
+        
+        # Detect language of the original resume
+        clean_text = self._clean_latex_content(original_latex)
+        resume_language = self._detect_language(clean_text)
+        
+        # Create adaptation prompt based on language
+        if resume_language == 'pt':
+            prompt = self._create_portuguese_adaptation_prompt(
+                original_latex, job_title, job_company, job_description, job_technologies, experience_level
+            )
+        else:
+            prompt = self._create_english_adaptation_prompt(
+                original_latex, job_title, job_company, job_description, job_technologies, experience_level
+            )
+        
+        try:
+            response = self.client.generate(
+                model=self.model_name,
+                prompt=prompt,
+                options={
+                    'temperature': 0.3,  # Lower temperature for more consistent output
+                    'top_p': 0.8,
+                    'num_predict': 2000  # Allow longer response for full LaTeX content
+                }
+            )
+            
+            adapted_latex = response['response'].strip()
+            
+            # Clean and validate the adapted LaTeX
+            adapted_latex = self._clean_adapted_latex_response(adapted_latex)
+            
+            # Ensure the adapted content maintains LaTeX structure
+            if not self._validate_latex_structure(adapted_latex):
+                raise Exception("AI-generated LaTeX does not maintain proper document structure")
+            
+            return adapted_latex
+            
+        except Exception as e:
+            logger.error(f"Resume adaptation failed: {e}")
+            raise OllamaConnectionError(f"Failed to adapt resume with Ollama: {e}")
+    
+    def _create_portuguese_adaptation_prompt(self, original_latex: str, job_title: str, 
+                                           job_company: str, job_description: str, 
+                                           job_technologies: List[str], experience_level: str) -> str:
+        """Create Portuguese adaptation prompt"""
+        tech_list = ', '.join(job_technologies) if job_technologies else 'não especificadas'
+        
+        return f"""
+Você é um especialista em adaptação de currículos para vagas específicas. Sua tarefa é adaptar o currículo LaTeX fornecido para otimizar as chances de aprovação no ATS (Applicant Tracking System) e impressionar recrutadores para a vaga específica.
+
+INFORMAÇÕES DA VAGA:
+- Título: {job_title}
+- Empresa: {job_company}
+- Nível: {experience_level}
+- Tecnologias principais: {tech_list}
+
+DESCRIÇÃO DA VAGA:
+{job_description[:1000]}...
+
+CURRÍCULO ORIGINAL (LaTeX):
+{original_latex}
+
+INSTRUÇÕES PARA ADAPTAÇÃO:
+1. MANTENHA a estrutura LaTeX original intacta (\\documentclass, \\begin{{document}}, \\end{{document}}, etc.)
+2. PRESERVE todas as seções principais do currículo
+3. ADAPTE o conteúdo para destacar experiências e habilidades relevantes para esta vaga
+4. INCLUA palavras-chave da descrição da vaga de forma natural no texto
+5. AJUSTE a ordem das experiências para priorizar as mais relevantes
+6. MANTENHA a veracidade das informações - apenas reorganize e enfatize, não invente
+7. OTIMIZE para ATS incluindo tecnologias e termos técnicos mencionados na vaga
+
+IMPORTANTE: Retorne APENAS o código LaTeX adaptado, sem explicações ou comentários adicionais.
+"""
+    
+    def _create_english_adaptation_prompt(self, original_latex: str, job_title: str, 
+                                        job_company: str, job_description: str, 
+                                        job_technologies: List[str], experience_level: str) -> str:
+        """Create English adaptation prompt"""
+        tech_list = ', '.join(job_technologies) if job_technologies else 'not specified'
+        
+        return f"""
+You are an expert in resume adaptation for specific job positions. Your task is to adapt the provided LaTeX resume to optimize chances of ATS (Applicant Tracking System) approval and impress recruiters for this specific position.
+
+JOB INFORMATION:
+- Title: {job_title}
+- Company: {job_company}
+- Level: {experience_level}
+- Key Technologies: {tech_list}
+
+JOB DESCRIPTION:
+{job_description[:1000]}...
+
+ORIGINAL RESUME (LaTeX):
+{original_latex}
+
+ADAPTATION INSTRUCTIONS:
+1. MAINTAIN the original LaTeX structure intact (\\documentclass, \\begin{{document}}, \\end{{document}}, etc.)
+2. PRESERVE all main resume sections
+3. ADAPT content to highlight experiences and skills relevant to this position
+4. INCLUDE keywords from the job description naturally in the text
+5. ADJUST the order of experiences to prioritize the most relevant ones
+6. MAINTAIN truthfulness of information - only reorganize and emphasize, don't fabricate
+7. OPTIMIZE for ATS by including technologies and technical terms mentioned in the job posting
+
+IMPORTANT: Return ONLY the adapted LaTeX code, without explanations or additional comments.
+"""
+    
+    def _clean_adapted_latex_response(self, response: str) -> str:
+        """
+        Clean the AI response to extract only LaTeX content
+        
+        Args:
+            response: Raw AI response
+            
+        Returns:
+            Cleaned LaTeX content
+        """
+        # Remove any explanatory text before or after LaTeX content
+        lines = response.split('\n')
+        latex_lines = []
+        in_latex = False
+        
+        for line in lines:
+            # Start collecting when we see documentclass
+            if '\\documentclass' in line:
+                in_latex = True
+            
+            if in_latex:
+                latex_lines.append(line)
+            
+            # Stop collecting after \end{document}
+            if '\\end{document}' in line:
+                break
+        
+        # If we didn't find proper LaTeX structure, try to extract from code blocks
+        if not latex_lines:
+            # Look for code blocks
+            code_block_pattern = r'```(?:latex)?\s*\n(.*?)\n```'
+            matches = re.findall(code_block_pattern, response, re.DOTALL)
+            if matches:
+                return matches[0].strip()
+            
+            # If no code blocks, return the original response cleaned
+            return response.strip()
+        
+        return '\n'.join(latex_lines)
+    
+    def _validate_latex_structure(self, latex_content: str) -> bool:
+        """
+        Validate that LaTeX content maintains proper document structure
+        
+        Args:
+            latex_content: LaTeX content to validate
+            
+        Returns:
+            bool: True if structure is valid
+        """
+        required_elements = [
+            r'\\documentclass',
+            r'\\begin\{document\}',
+            r'\\end\{document\}'
+        ]
+        
+        for element in required_elements:
+            if not re.search(element, latex_content):
+                return False
+        
+        return True

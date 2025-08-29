@@ -12,7 +12,7 @@ from typing import Optional, List, Tuple
 from sqlalchemy.orm import Session
 
 from ..database import get_db_context
-from ..models import Resume
+from ..models import Resume, AdaptedResumeDraft, JobListing
 from ..models.validators import validate_latex_content, sanitize_filename
 from ..config import get_settings
 from .ai_matching_service import AIMatchingService, KeywordExtractionResult
@@ -453,4 +453,207 @@ class ResumeService:
             'user_keywords': resume.user_keywords,
             'all_keywords': resume.all_keywords
         }
+    
+    def adapt_resume_for_job(self, resume_id: int, job_id: int) -> int:
+        """
+        Adapt a resume for a specific job using AI
+        
+        Args:
+            resume_id: ID of the original resume
+            job_id: ID of the job to adapt for
+            
+        Returns:
+            ID of the created AdaptedResumeDraft
+            
+        Raises:
+            ValueError: If resume or job not found
+            Exception: If adaptation fails
+        """
+        # Get the original resume
+        resume = self.get_resume_by_id(resume_id)
+        if not resume:
+            raise ValueError(f"Resume with ID {resume_id} not found")
+        
+        # Get the job listing
+        with get_db_context() as db:
+            job = db.query(JobListing).filter(JobListing.id == job_id).first()
+            if not job:
+                raise ValueError(f"Job listing with ID {job_id} not found")
+            
+            # Check if adaptation already exists
+            existing_draft = db.query(AdaptedResumeDraft).filter(
+                AdaptedResumeDraft.original_resume_id == resume_id,
+                AdaptedResumeDraft.job_id == job_id
+            ).first()
+            
+            if existing_draft:
+                # Return existing draft ID
+                return existing_draft.id
+            
+            # Create job data for adaptation
+            job_data = {
+                'title': job.title,
+                'company': job.company,
+                'description': job.description,
+                'technologies': job.technologies or [],
+                'experience_level': job.experience_level.value if job.experience_level else None,
+                'remote_type': job.remote_type.value if job.remote_type else None
+            }
+        
+        # Use AI service to adapt the resume
+        try:
+            adapted_latex = self.ai_service.adapt_resume_content(
+                original_latex=resume.latex_content,
+                job_data=job_data
+            )
+            
+            # Validate the adapted LaTeX
+            if not self.validate_latex(adapted_latex):
+                raise Exception("AI-generated LaTeX content is invalid")
+            
+            # Create and save the adapted resume draft
+            with get_db_context() as db:
+                draft = AdaptedResumeDraft(
+                    original_resume_id=resume_id,
+                    job_id=job_id,
+                    adapted_latex_content=adapted_latex,
+                    is_user_edited=False
+                )
+                db.add(draft)
+                db.commit()
+                db.refresh(draft)
+                return draft.id
+                
+        except Exception as e:
+            raise Exception(f"Failed to adapt resume: {str(e)}")
+    
+    def get_adapted_resume_draft(self, draft_id: int) -> Optional[dict]:
+        """
+        Get an adapted resume draft by ID
+        
+        Args:
+            draft_id: ID of the adapted resume draft
+            
+        Returns:
+            Dictionary with draft information or None if not found
+        """
+        with get_db_context() as db:
+            draft = db.query(AdaptedResumeDraft).filter(AdaptedResumeDraft.id == draft_id).first()
+            if not draft:
+                return None
+            
+            # Get related data
+            original_resume = db.query(Resume).filter(Resume.id == draft.original_resume_id).first()
+            job = db.query(JobListing).filter(JobListing.id == draft.job_id).first()
+            
+            return {
+                'id': draft.id,
+                'original_resume_id': draft.original_resume_id,
+                'job_id': draft.job_id,
+                'adapted_latex_content': draft.adapted_latex_content,
+                'is_user_edited': draft.is_user_edited,
+                'created_at': draft.created_at,
+                'updated_at': draft.updated_at,
+                'original_resume_filename': original_resume.filename if original_resume else None,
+                'job_title': job.title if job else None,
+                'job_company': job.company if job else None,
+                'status': 'User Modified' if draft.is_user_edited else 'AI Generated'
+            }
+    
+    def update_adapted_resume_draft(self, draft_id: int, latex_content: str) -> bool:
+        """
+        Update an adapted resume draft with user edits
+        
+        Args:
+            draft_id: ID of the adapted resume draft
+            latex_content: Updated LaTeX content
+            
+        Returns:
+            bool: True if successful
+            
+        Raises:
+            ValueError: If LaTeX content is invalid
+        """
+        # Validate LaTeX content
+        if not self.validate_latex(latex_content):
+            raise ValueError("Invalid LaTeX content")
+        
+        with get_db_context() as db:
+            draft = db.query(AdaptedResumeDraft).filter(AdaptedResumeDraft.id == draft_id).first()
+            if not draft:
+                return False
+            
+            draft.adapted_latex_content = latex_content
+            draft.mark_as_edited()
+            return True
+    
+    def get_adapted_resume_drafts_for_resume(self, resume_id: int) -> List[dict]:
+        """
+        Get all adapted resume drafts for a specific resume
+        
+        Args:
+            resume_id: ID of the original resume
+            
+        Returns:
+            List of adapted resume draft dictionaries
+        """
+        with get_db_context() as db:
+            drafts = db.query(AdaptedResumeDraft).filter(
+                AdaptedResumeDraft.original_resume_id == resume_id
+            ).all()
+            
+            result = []
+            for draft in drafts:
+                job = db.query(JobListing).filter(JobListing.id == draft.job_id).first()
+                result.append({
+                    'id': draft.id,
+                    'job_id': draft.job_id,
+                    'job_title': job.title if job else 'Unknown Job',
+                    'job_company': job.company if job else 'Unknown Company',
+                    'is_user_edited': draft.is_user_edited,
+                    'created_at': draft.created_at,
+                    'updated_at': draft.updated_at,
+                    'status': 'User Modified' if draft.is_user_edited else 'AI Generated'
+                })
+            
+            return result
+    
+    def delete_adapted_resume_draft(self, draft_id: int) -> bool:
+        """
+        Delete an adapted resume draft
+        
+        Args:
+            draft_id: ID of the adapted resume draft
+            
+        Returns:
+            bool: True if successful
+        """
+        with get_db_context() as db:
+            draft = db.query(AdaptedResumeDraft).filter(AdaptedResumeDraft.id == draft_id).first()
+            if not draft:
+                return False
+            
+            db.delete(draft)
+            return True
+    
+    def compile_adapted_resume_to_pdf(self, draft_id: int, output_path: Optional[str] = None) -> bytes:
+        """
+        Compile an adapted resume draft to PDF
+        
+        Args:
+            draft_id: ID of the adapted resume draft
+            output_path: Optional path to save PDF file
+            
+        Returns:
+            bytes: PDF content as bytes
+            
+        Raises:
+            ValueError: If draft not found
+            LaTeXCompilationError: If compilation fails
+        """
+        draft = self.get_adapted_resume_draft(draft_id)
+        if not draft:
+            raise ValueError(f"Adapted resume draft with ID {draft_id} not found")
+        
+        return self.compile_to_pdf(draft['adapted_latex_content'], output_path)
     

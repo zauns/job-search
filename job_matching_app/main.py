@@ -298,6 +298,334 @@ def remove_keyword(resume_id, keyword):
         console.print(f"[yellow]Keyword '{keyword}' not found in user keywords[/yellow]")
 
 
+@resume.command("adapt")
+@click.argument("resume_id", type=int)
+@click.argument("job_id", type=int)
+def adapt_resume(resume_id, job_id):
+    """Adapt a resume for a specific job using AI"""
+    from .services.latex_editor_service import LaTeXEditorService
+    
+    resume_service = ResumeService()
+    job_service = JobListingService()
+    editor_service = LaTeXEditorService()
+    
+    # Verify resume exists
+    resume_obj = resume_service.get_resume_by_id(resume_id)
+    if not resume_obj:
+        console.print(f"[red]Error:[/red] Resume with ID {resume_id} not found")
+        return
+    
+    # Verify job exists
+    job_obj = job_service.get_job_by_id(job_id)
+    if not job_obj:
+        console.print(f"[red]Error:[/red] Job with ID {job_id} not found")
+        return
+    
+    console.print(f"\n[bold]Adapting Resume for Job:[/bold]")
+    console.print(f"• Resume: {resume_obj.filename}")
+    console.print(f"• Job: {job_obj.title} at {job_obj.company}")
+    
+    try:
+        with console.status("[bold green]Adapting resume with AI..."):
+            draft_id = resume_service.adapt_resume_for_job(resume_id, job_id)
+        
+        console.print(f"[green]✓[/green] Resume adapted successfully!")
+        console.print(f"• Draft ID: {draft_id}")
+        
+        # Get draft info
+        draft_info = resume_service.get_adapted_resume_draft(draft_id)
+        if draft_info:
+            console.print(f"• Status: {draft_info['status']}")
+            console.print(f"• Created: {draft_info['created_at']}")
+        
+        # Ask if user wants to edit the adapted resume
+        if click.confirm("\nWould you like to review and edit the adapted resume?"):
+            _interactive_resume_editor(editor_service, draft_id)
+        
+    except Exception as e:
+        console.print(f"[red]Error adapting resume:[/red] {e}")
+
+
+@resume.command("drafts")
+@click.argument("resume_id", type=int)
+def list_drafts(resume_id):
+    """List all adapted resume drafts for a resume"""
+    resume_service = ResumeService()
+    
+    # Verify resume exists
+    resume_obj = resume_service.get_resume_by_id(resume_id)
+    if not resume_obj:
+        console.print(f"[red]Error:[/red] Resume with ID {resume_id} not found")
+        return
+    
+    drafts = resume_service.get_adapted_resume_drafts_for_resume(resume_id)
+    
+    if not drafts:
+        console.print(f"[yellow]No adapted drafts found for resume: {resume_obj.filename}[/yellow]")
+        return
+    
+    table = Table(title=f"Adapted Resume Drafts for: {resume_obj.filename}")
+    table.add_column("Draft ID", style="cyan", no_wrap=True)
+    table.add_column("Job", style="magenta")
+    table.add_column("Company", style="blue")
+    table.add_column("Status", style="green")
+    table.add_column("Created", style="yellow")
+    
+    for draft in drafts:
+        table.add_row(
+            str(draft['id']),
+            draft['job_title'],
+            draft['job_company'],
+            draft['status'],
+            draft['created_at'].strftime("%Y-%m-%d %H:%M")
+        )
+    
+    console.print(table)
+
+
+@resume.command("edit-draft")
+@click.argument("draft_id", type=int)
+def edit_draft(draft_id):
+    """Edit an adapted resume draft"""
+    from .services.latex_editor_service import LaTeXEditorService
+    
+    editor_service = LaTeXEditorService()
+    
+    # Verify draft exists
+    draft_info = editor_service.get_adapted_resume_for_editing(draft_id)
+    if not draft_info:
+        console.print(f"[red]Error:[/red] Adapted resume draft with ID {draft_id} not found")
+        return
+    
+    console.print(f"\n[bold]Editing Adapted Resume Draft:[/bold]")
+    console.print(f"• Draft ID: {draft_info['id']}")
+    console.print(f"• Original Resume: {draft_info['original_resume_filename']}")
+    console.print(f"• Job: {draft_info['job_title']} at {draft_info['job_company']}")
+    console.print(f"• Status: {draft_info['status']}")
+    
+    _interactive_resume_editor(editor_service, draft_id)
+
+
+@resume.command("compile-draft")
+@click.argument("draft_id", type=int)
+@click.option("--output", "-o", help="Output PDF file path")
+def compile_draft(draft_id, output):
+    """Compile an adapted resume draft to PDF"""
+    from .services.latex_editor_service import LaTeXEditorService
+    
+    editor_service = LaTeXEditorService()
+    
+    # Verify draft exists
+    draft_info = editor_service.get_adapted_resume_for_editing(draft_id)
+    if not draft_info:
+        console.print(f"[red]Error:[/red] Adapted resume draft with ID {draft_id} not found")
+        return
+    
+    console.print(f"\n[bold]Compiling Adapted Resume Draft:[/bold]")
+    console.print(f"• Draft ID: {draft_info['id']}")
+    console.print(f"• Job: {draft_info['job_title']} at {draft_info['job_company']}")
+    
+    try:
+        with console.status("[bold green]Compiling LaTeX to PDF..."):
+            success, message, pdf_content = editor_service.compile_and_save_pdf(draft_id, output)
+        
+        if success:
+            console.print(f"[green]✓[/green] {message}")
+        else:
+            console.print(f"[red]Compilation Error:[/red] {message}")
+        
+    except Exception as e:
+        console.print(f"[red]Unexpected error:[/red] {e}")
+
+
+def _interactive_resume_editor(editor_service, draft_id):
+    """Interactive resume editor interface"""
+    while True:
+        # Get current draft info
+        draft_info = editor_service.get_adapted_resume_for_editing(draft_id)
+        if not draft_info:
+            console.print(f"[red]Error:[/red] Draft not found")
+            return
+        
+        console.print(f"\n[bold]Resume Editor - Draft {draft_id}[/bold]")
+        console.print(f"• Job: {draft_info['job_title']} at {draft_info['job_company']}")
+        console.print(f"• Status: {draft_info['status']}")
+        console.print(f"• Content length: {len(draft_info['adapted_latex_content']):,} characters")
+        
+        # Show menu
+        console.print("\n[bold]Editor Options:[/bold]")
+        console.print("1. View LaTeX content")
+        console.print("2. Validate LaTeX")
+        console.print("3. Preview compilation")
+        console.print("4. Edit content (external editor)")
+        console.print("5. Get editing suggestions")
+        console.print("6. Compile to PDF")
+        console.print("7. Exit editor")
+        
+        choice = click.prompt("\nSelect option", type=int, default=7)
+        
+        if choice == 1:
+            _view_latex_content(draft_info['adapted_latex_content'])
+        elif choice == 2:
+            _validate_latex_content(editor_service, draft_info['adapted_latex_content'])
+        elif choice == 3:
+            _preview_compilation(editor_service, draft_info['adapted_latex_content'])
+        elif choice == 4:
+            _edit_latex_content(editor_service, draft_id, draft_info['adapted_latex_content'])
+        elif choice == 5:
+            _show_editing_suggestions(editor_service, draft_info['adapted_latex_content'])
+        elif choice == 6:
+            _compile_draft_interactive(editor_service, draft_id)
+        elif choice == 7:
+            console.print("[green]Exiting resume editor.[/green]")
+            break
+        else:
+            console.print("[red]Invalid option. Please try again.[/red]")
+
+
+def _view_latex_content(latex_content):
+    """Display LaTeX content"""
+    console.print("\n[bold]LaTeX Content:[/bold]")
+    console.print(Panel(latex_content, title="LaTeX Source", border_style="blue"))
+    click.pause("\nPress any key to continue...")
+
+
+def _validate_latex_content(editor_service, latex_content):
+    """Validate LaTeX content and show results"""
+    validation = editor_service.validate_latex_content(latex_content)
+    
+    console.print(f"\n[bold]LaTeX Validation Results:[/bold]")
+    
+    if validation.is_valid:
+        console.print("[green]✓ LaTeX content is valid![/green]")
+    else:
+        console.print("[red]✗ LaTeX content has errors:[/red]")
+        for error in validation.errors:
+            console.print(f"  • [red]{error}[/red]")
+    
+    if validation.warnings:
+        console.print("\n[yellow]Warnings:[/yellow]")
+        for warning in validation.warnings:
+            console.print(f"  • [yellow]{warning}[/yellow]")
+    
+    click.pause("\nPress any key to continue...")
+
+
+def _preview_compilation(editor_service, latex_content):
+    """Preview LaTeX compilation"""
+    console.print("\n[bold]Compilation Preview:[/bold]")
+    
+    with console.status("[bold green]Testing compilation..."):
+        success, message = editor_service.preview_latex_compilation(latex_content)
+    
+    if success:
+        console.print(f"[green]✓ {message}[/green]")
+    else:
+        console.print(f"[red]✗ {message}[/red]")
+    
+    click.pause("\nPress any key to continue...")
+
+
+def _edit_latex_content(editor_service, draft_id, current_content):
+    """Edit LaTeX content using external editor"""
+    import tempfile
+    import os
+    
+    console.print("\n[bold]External Editor Mode:[/bold]")
+    console.print("Opening LaTeX content in external editor...")
+    
+    # Create temporary file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.tex', delete=False) as f:
+        f.write(current_content)
+        temp_file = f.name
+    
+    try:
+        # Open in external editor
+        click.edit(filename=temp_file)
+        
+        # Read back the content
+        with open(temp_file, 'r', encoding='utf-8') as f:
+            edited_content = f.read()
+        
+        # Check if content was changed
+        if edited_content != current_content:
+            console.print("\n[bold]Content was modified.[/bold]")
+            
+            # Validate the edited content
+            validation = editor_service.validate_latex_content(edited_content)
+            if not validation.is_valid:
+                console.print("[red]Warning: Edited content has validation errors:[/red]")
+                for error in validation.errors:
+                    console.print(f"  • [red]{error}[/red]")
+                
+                if not click.confirm("Save anyway?"):
+                    console.print("[yellow]Changes discarded.[/yellow]")
+                    return
+            
+            # Save the changes
+            success, errors = editor_service.save_edited_resume(draft_id, edited_content)
+            if success:
+                console.print("[green]✓ Changes saved successfully![/green]")
+            else:
+                console.print("[red]Failed to save changes:[/red]")
+                for error in errors:
+                    console.print(f"  • [red]{error}[/red]")
+        else:
+            console.print("[yellow]No changes made.[/yellow]")
+    
+    finally:
+        # Clean up temporary file
+        try:
+            os.unlink(temp_file)
+        except:
+            pass
+
+
+def _show_editing_suggestions(editor_service, latex_content):
+    """Show LaTeX editing suggestions"""
+    suggestions = editor_service.get_latex_editing_suggestions(latex_content)
+    
+    console.print("\n[bold]LaTeX Editing Suggestions:[/bold]")
+    
+    if suggestions:
+        for i, suggestion in enumerate(suggestions, 1):
+            console.print(f"{i}. {suggestion}")
+    else:
+        console.print("[green]No specific suggestions - your LaTeX looks good![/green]")
+    
+    # Show template suggestions
+    templates = editor_service.get_latex_template_suggestions()
+    console.print("\n[bold]Template Suggestions:[/bold]")
+    for template in templates:
+        console.print(f"• [cyan]{template['name']}[/cyan]: {template['description']}")
+        console.print(f"  Example: [dim]{template['example']}[/dim]")
+    
+    click.pause("\nPress any key to continue...")
+
+
+def _compile_draft_interactive(editor_service, draft_id):
+    """Interactive PDF compilation"""
+    console.print("\n[bold]PDF Compilation:[/bold]")
+    
+    output_path = click.prompt("Enter output PDF path (or press Enter for default)", default="", show_default=False)
+    if not output_path:
+        output_path = None
+    
+    try:
+        with console.status("[bold green]Compiling to PDF..."):
+            success, message, pdf_content = editor_service.compile_and_save_pdf(draft_id, output_path)
+        
+        if success:
+            console.print(f"[green]✓ {message}[/green]")
+        else:
+            console.print(f"[red]✗ {message}[/red]")
+    
+    except Exception as e:
+        console.print(f"[red]Compilation error:[/red] {e}")
+    
+    click.pause("\nPress any key to continue...")
+
+
 def _display_keywords(resume_obj):
     """Display keywords in a formatted table"""
     table = Table(title=f"Keywords for {resume_obj.filename}")
