@@ -4,8 +4,10 @@ AI-powered matching service using Ollama for keyword extraction and job matching
 import re
 import json
 import logging
+import math
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
+from collections import Counter
 
 try:
     import ollama
@@ -15,6 +17,8 @@ except ImportError:
     ollama = None
 
 from ..config import get_settings
+from ..models.job_listing import JobListing
+from ..models.job_match import JobMatch
 
 
 logger = logging.getLogger(__name__)
@@ -26,6 +30,18 @@ class KeywordExtractionResult:
     keywords: List[str]
     confidence: float
     language_detected: str
+
+
+@dataclass
+class JobMatchResult:
+    """Result of job matching with detailed metrics"""
+    job_listing: JobListing
+    compatibility_score: float
+    matching_keywords: List[str]
+    missing_keywords: List[str]
+    keyword_match_ratio: float
+    technical_match_score: float
+    language_match_bonus: float
 
 
 class OllamaConnectionError(Exception):
@@ -361,13 +377,14 @@ Maximum 15 keywords, prioritizing technical and specific terms.
         
         return cleaned[:15]  # Limit to 15 keywords
     
-    def calculate_job_compatibility(self, resume_keywords: List[str], job_description: str) -> float:
+    def calculate_job_compatibility(self, resume_keywords: List[str], job_description: str, job_technologies: List[str] = None) -> float:
         """
         Calculate compatibility score between resume keywords and job description
         
         Args:
             resume_keywords: Keywords extracted from resume
             job_description: Job description text
+            job_technologies: List of technologies from job listing (optional)
             
         Returns:
             Compatibility score between 0.0 and 1.0
@@ -376,35 +393,304 @@ Maximum 15 keywords, prioritizing technical and specific terms.
             return 0.0
         
         job_text = job_description.lower()
-        matches = 0
+        job_tech_list = [tech.lower() for tech in (job_technologies or [])]
+        
+        # Find exact keyword matches in description
+        exact_matches = []
+        for keyword in resume_keywords:
+            keyword_lower = keyword.lower()
+            if keyword_lower in job_text or keyword_lower in job_tech_list:
+                exact_matches.append(keyword)
+        
+        # Find partial/fuzzy matches using similarity
+        partial_matches = []
+        for keyword in resume_keywords:
+            if keyword not in exact_matches:
+                if self._find_similar_terms(keyword.lower(), job_text, threshold=0.7):
+                    partial_matches.append(keyword)
+        
+        # Calculate base compatibility score
+        total_matches = len(exact_matches) + (len(partial_matches) * 0.5)
+        base_compatibility = total_matches / len(resume_keywords)
+        
+        # Apply technical keyword boost
+        tech_keywords = [kw for kw in resume_keywords if self._is_technical_keyword(kw)]
+        tech_exact_matches = [kw for kw in exact_matches if self._is_technical_keyword(kw)]
+        tech_partial_matches = [kw for kw in partial_matches if self._is_technical_keyword(kw)]
+        
+        tech_boost = 0.0
+        if tech_keywords:
+            tech_match_score = (len(tech_exact_matches) + len(tech_partial_matches) * 0.5) / len(tech_keywords)
+            tech_boost = tech_match_score * 0.2  # 20% boost for technical matches
+        
+        # Apply language consistency bonus
+        job_language = self._detect_language(job_description)
+        resume_language = self._detect_resume_language(resume_keywords)
+        language_bonus = 0.05 if job_language == resume_language else 0.0
+        
+        # Calculate final score
+        final_score = min(1.0, base_compatibility + tech_boost + language_bonus)
+        return round(final_score, 3)
+    
+    def calculate_detailed_job_match(self, resume_keywords: List[str], job_listing: JobListing) -> JobMatchResult:
+        """
+        Calculate detailed job match with comprehensive metrics
+        
+        Args:
+            resume_keywords: Keywords extracted from resume
+            job_listing: Job listing to match against
+            
+        Returns:
+            JobMatchResult with detailed matching information
+        """
+        if not resume_keywords:
+            return JobMatchResult(
+                job_listing=job_listing,
+                compatibility_score=0.0,
+                matching_keywords=[],
+                missing_keywords=[],
+                keyword_match_ratio=0.0,
+                technical_match_score=0.0,
+                language_match_bonus=0.0
+            )
+        
+        job_text = job_listing.description.lower()
+        job_tech_list = [tech.lower() for tech in (job_listing.technologies or [])]
+        
+        # Find matching and missing keywords
+        matching_keywords = []
+        missing_keywords = []
         
         for keyword in resume_keywords:
-            if keyword.lower() in job_text:
-                matches += 1
+            keyword_lower = keyword.lower()
+            if (keyword_lower in job_text or 
+                keyword_lower in job_tech_list or 
+                self._find_similar_terms(keyword_lower, job_text, threshold=0.8)):
+                matching_keywords.append(keyword)
+            else:
+                missing_keywords.append(keyword)
         
-        # Calculate basic compatibility score
-        compatibility = matches / len(resume_keywords)
+        # Calculate metrics
+        keyword_match_ratio = len(matching_keywords) / len(resume_keywords) if resume_keywords else 0.0
         
-        # Boost score for exact technical matches
+        # Technical match score
         tech_keywords = [kw for kw in resume_keywords if self._is_technical_keyword(kw)]
-        tech_matches = sum(1 for kw in tech_keywords if kw.lower() in job_text)
+        tech_matches = [kw for kw in matching_keywords if self._is_technical_keyword(kw)]
+        technical_match_score = len(tech_matches) / len(tech_keywords) if tech_keywords else 0.0
         
-        if tech_keywords:
-            tech_boost = (tech_matches / len(tech_keywords)) * 0.3
-            compatibility = min(1.0, compatibility + tech_boost)
+        # Language match bonus
+        job_language = self._detect_language(job_listing.description)
+        resume_language = self._detect_resume_language(resume_keywords)
+        language_match_bonus = 0.05 if job_language == resume_language else 0.0
         
-        return round(compatibility, 3)
+        # Calculate overall compatibility
+        compatibility_score = self.calculate_job_compatibility(
+            resume_keywords, 
+            job_listing.description, 
+            job_listing.technologies
+        )
+        
+        return JobMatchResult(
+            job_listing=job_listing,
+            compatibility_score=compatibility_score,
+            matching_keywords=matching_keywords,
+            missing_keywords=missing_keywords,
+            keyword_match_ratio=keyword_match_ratio,
+            technical_match_score=technical_match_score,
+            language_match_bonus=language_match_bonus
+        )
+    
+    def rank_jobs_by_compatibility(self, resume_keywords: List[str], job_listings: List[JobListing]) -> List[JobMatchResult]:
+        """
+        Rank job listings by compatibility with resume keywords
+        
+        Args:
+            resume_keywords: Keywords extracted from resume
+            job_listings: List of job listings to rank
+            
+        Returns:
+            List of JobMatchResult sorted by compatibility score (highest first)
+        """
+        if not resume_keywords or not job_listings:
+            return []
+        
+        # Calculate detailed matches for all jobs
+        job_matches = []
+        for job_listing in job_listings:
+            match_result = self.calculate_detailed_job_match(resume_keywords, job_listing)
+            job_matches.append(match_result)
+        
+        # Sort by compatibility score (descending) with secondary sorting criteria
+        job_matches.sort(key=lambda x: (
+            x.compatibility_score,           # Primary: overall compatibility
+            x.technical_match_score,         # Secondary: technical match quality
+            x.keyword_match_ratio,           # Tertiary: keyword coverage
+            len(x.matching_keywords)         # Quaternary: absolute number of matches
+        ), reverse=True)
+        
+        return job_matches
+    
+    def create_job_match_records(self, resume_id: int, job_match_results: List[JobMatchResult]) -> List[JobMatch]:
+        """
+        Create JobMatch database records from matching results
+        
+        Args:
+            resume_id: ID of the resume
+            job_match_results: List of job match results
+            
+        Returns:
+            List of JobMatch objects ready for database insertion
+        """
+        job_matches = []
+        
+        for result in job_match_results:
+            job_match = JobMatch(
+                resume_id=resume_id,
+                job_listing_id=result.job_listing.id,
+                compatibility_score=result.compatibility_score,
+                matching_keywords=result.matching_keywords,
+                missing_keywords=result.missing_keywords,
+                algorithm_version=2  # Updated algorithm version
+            )
+            job_matches.append(job_match)
+        
+        return job_matches
     
     def _is_technical_keyword(self, keyword: str) -> bool:
         """Check if a keyword is technical/skill-related"""
         technical_indicators = [
             'python', 'java', 'javascript', 'react', 'sql', 'docker', 'aws',
             'machine learning', 'api', 'git', 'linux', 'database', 'framework',
-            'library', 'algorithm', 'programming', 'development', 'software'
+            'library', 'algorithm', 'programming', 'development', 'software',
+            'typescript', 'node', 'angular', 'vue', 'mongodb', 'postgresql',
+            'redis', 'kubernetes', 'jenkins', 'ci/cd', 'devops', 'cloud',
+            'microservices', 'rest', 'graphql', 'agile', 'scrum', 'testing',
+            'django', 'flask', 'spring', 'boot', 'hibernate', 'maven', 'gradle',
+            'webpack', 'babel', 'sass', 'css', 'html', 'bootstrap', 'jquery'
         ]
         
         keyword_lower = keyword.lower()
         return any(indicator in keyword_lower for indicator in technical_indicators)
+    
+    def _find_similar_terms(self, keyword: str, text: str, threshold: float = 0.7) -> bool:
+        """
+        Find similar terms in text using simple string similarity
+        
+        Args:
+            keyword: Keyword to search for
+            text: Text to search in
+            threshold: Similarity threshold (0.0 to 1.0)
+            
+        Returns:
+            True if similar terms found above threshold
+        """
+        # Split text into words and clean them
+        words = re.findall(r'\b\w+\b', text.lower())
+        
+        for word in words:
+            if len(word) < 3:  # Skip very short words
+                continue
+            
+            # Calculate simple similarity score
+            similarity = self._calculate_string_similarity(keyword, word)
+            if similarity >= threshold:
+                return True
+        
+        return False
+    
+    def _calculate_string_similarity(self, str1: str, str2: str) -> float:
+        """
+        Calculate similarity between two strings using Jaccard similarity
+        
+        Args:
+            str1: First string
+            str2: Second string
+            
+        Returns:
+            Similarity score between 0.0 and 1.0
+        """
+        if not str1 or not str2:
+            return 0.0
+        
+        if str1 == str2:
+            return 1.0
+        
+        # Use character n-grams for similarity
+        def get_ngrams(text: str, n: int = 2) -> set:
+            return set(text[i:i+n] for i in range(len(text) - n + 1))
+        
+        ngrams1 = get_ngrams(str1.lower())
+        ngrams2 = get_ngrams(str2.lower())
+        
+        if not ngrams1 or not ngrams2:
+            return 0.0
+        
+        intersection = len(ngrams1.intersection(ngrams2))
+        union = len(ngrams1.union(ngrams2))
+        
+        return intersection / union if union > 0 else 0.0
+    
+    def _detect_resume_language(self, keywords: List[str]) -> str:
+        """
+        Detect language of resume based on keywords
+        
+        Args:
+            keywords: List of keywords from resume
+            
+        Returns:
+            Language code ('pt' or 'en')
+        """
+        if not keywords:
+            return 'en'
+        
+        # Join keywords into text for language detection
+        keywords_text = ' '.join(keywords)
+        return self._detect_language(keywords_text)
+    
+    def _normalize_multilingual_keywords(self, keywords: List[str], target_language: str = 'en') -> List[str]:
+        """
+        Normalize keywords for multilingual matching
+        
+        Args:
+            keywords: List of keywords to normalize
+            target_language: Target language for normalization
+            
+        Returns:
+            Normalized keywords list
+        """
+        # Simple translation mapping for common technical terms
+        pt_to_en_mapping = {
+            'desenvolvimento': 'development',
+            'programação': 'programming',
+            'banco de dados': 'database',
+            'ciência de dados': 'data science',
+            'aprendizado de máquina': 'machine learning',
+            'inteligência artificial': 'artificial intelligence',
+            'engenharia de software': 'software engineering',
+            'desenvolvimento web': 'web development',
+            'aplicação web': 'web application',
+            'sistema': 'system',
+            'arquitetura': 'architecture',
+            'framework': 'framework',
+            'biblioteca': 'library',
+            'ferramenta': 'tool',
+            'tecnologia': 'technology'
+        }
+        
+        en_to_pt_mapping = {v: k for k, v in pt_to_en_mapping.items()}
+        
+        normalized = []
+        for keyword in keywords:
+            keyword_lower = keyword.lower()
+            
+            if target_language == 'en' and keyword_lower in pt_to_en_mapping:
+                normalized.append(pt_to_en_mapping[keyword_lower])
+            elif target_language == 'pt' and keyword_lower in en_to_pt_mapping:
+                normalized.append(en_to_pt_mapping[keyword_lower])
+            else:
+                normalized.append(keyword)
+        
+        return normalized
     
     def get_model_info(self) -> Dict[str, str]:
         """

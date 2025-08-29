@@ -64,7 +64,13 @@
   - Write unit tests for keyword CRUD operations
   - _Requirements: 2.2, 2.3_
 
-- [ ] 6. Build web scraping service for job listings
+- [x] 6. Build web scraping service for job listings
+
+
+
+
+
+
   - Implement JobScrapingService with Scrapy framework
   - Create scrapers for Indeed and LinkedIn job listings
   - Add data normalization and cleaning for consistent job data structure
@@ -72,7 +78,12 @@
   - Write unit tests with sample HTML response fixtures
   - _Requirements: 6.1, 6.2, 6.3, 6.4_
 
-- [ ] 7. Develop job matching and ranking algorithm
+- [x] 7. Develop job matching and ranking algorithm
+
+
+
+
+
   - Create AIMatchingService for calculating job compatibility scores
   - Implement keyword-based matching algorithm using similarity metrics
   - Add job ranking functionality based on compatibility scores
@@ -81,6 +92,10 @@
   - _Requirements: 7.3, 7.4_
 
 - [ ] 8. Implement job listing display and pagination
+
+
+
+
   - Create CLI interface for displaying job listings with pagination (30 per page)
   - Add job filtering and sorting capabilities
   - Implement job detail view with complete information display
