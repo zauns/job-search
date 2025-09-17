@@ -2,6 +2,7 @@
 Main entry point for the Job Matching Application
 """
 import click
+from typing import Dict, Any
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -750,8 +751,11 @@ def jobs():
 @click.option("--experience-level", type=click.Choice(['intern', 'junior', 'mid', 'senior', 'lead', 'manager']), help="Filter by experience level")
 @click.option("--source-site", help="Filter by source site")
 @click.option("--interactive", "-i", is_flag=True, help="Interactive job browsing mode")
-def list_jobs(page, per_page, sort_by, sort_order, company, location, remote_type, experience_level, source_site, interactive):
-    """List job listings with pagination and filtering"""
+@click.option("--no-auto-scrape", is_flag=True, help="Disable automatic scraping of fresh data")
+@click.option("--keywords", help="Keywords for auto-scraping (comma-separated)")
+@click.option("--scrape-location", help="Location for auto-scraping")
+def list_jobs(page, per_page, sort_by, sort_order, company, location, remote_type, experience_level, source_site, interactive, no_auto_scrape, keywords, scrape_location):
+    """List job listings with pagination and filtering. Automatically scrapes fresh data if needed."""
     job_service = JobListingService()
     
     # Build filters
@@ -767,10 +771,23 @@ def list_jobs(page, per_page, sort_by, sort_order, company, location, remote_typ
     if source_site:
         filters['source_site'] = source_site
     
+    # Parse keywords for auto-scraping
+    scrape_keywords = None
+    if keywords:
+        scrape_keywords = [k.strip() for k in keywords.split(',') if k.strip()]
+    
+    # Set up progress callback for scraping feedback
+    def progress_callback(message: str, data: Dict[str, Any]):
+        console.print(f"[blue]Scraping:[/blue] {message}")
+        if 'jobs_found' in data:
+            console.print(f"  • Found {data['jobs_found']} jobs from {data.get('site', 'unknown site')}")
+    
     if interactive:
-        _interactive_job_browser(job_service, filters, sort_by, sort_order, per_page)
+        _interactive_job_browser(job_service, filters, sort_by, sort_order, per_page, 
+                                not no_auto_scrape, scrape_keywords, scrape_location or "")
     else:
-        _display_job_listings_page(job_service, page, per_page, sort_by, sort_order, filters)
+        _display_job_listings_page(job_service, page, per_page, sort_by, sort_order, filters,
+                                  not no_auto_scrape, scrape_keywords, scrape_location or "", progress_callback)
 
 
 @jobs.command("search")
@@ -780,16 +797,31 @@ def list_jobs(page, per_page, sort_by, sort_order, company, location, remote_typ
 @click.option("--sort-by", default="scraped_at", help="Sort field")
 @click.option("--sort-order", default="desc", type=click.Choice(['asc', 'desc']), help="Sort order")
 @click.option("--interactive", "-i", is_flag=True, help="Interactive search results browsing")
-def search_jobs(search_term, page, per_page, sort_by, sort_order, interactive):
-    """Search job listings by title, company, or description"""
+@click.option("--no-auto-scrape", is_flag=True, help="Disable automatic scraping of fresh data")
+@click.option("--scrape-location", help="Location for auto-scraping")
+def search_jobs(search_term, page, per_page, sort_by, sort_order, interactive, no_auto_scrape, scrape_location):
+    """Search job listings by title, company, or description. Automatically scrapes fresh data if needed."""
     job_service = JobListingService()
     
+    # Set up progress callback for scraping feedback
+    def progress_callback(message: str, data: Dict[str, Any]):
+        console.print(f"[blue]Scraping:[/blue] {message}")
+        if 'jobs_found' in data:
+            console.print(f"  • Found {data['jobs_found']} jobs from {data.get('site', 'unknown site')}")
+    
     if interactive:
-        _interactive_search_browser(job_service, search_term, sort_by, sort_order, per_page)
+        _interactive_search_browser(job_service, search_term, sort_by, sort_order, per_page,
+                                   not no_auto_scrape, scrape_location or "", progress_callback)
     else:
-        job_listings, total_count, total_pages = job_service.search_jobs(
-            search_term, page, per_page, sort_by, sort_order
+        job_listings, total_count, total_pages, scraping_result = job_service.search_jobs(
+            search_term, page, per_page, sort_by, sort_order, 
+            auto_scrape=not no_auto_scrape, location=scrape_location or "", 
+            progress_callback=progress_callback
         )
+        
+        # Display scraping results if any
+        if scraping_result and scraping_result.get('scraping_triggered'):
+            _display_scraping_results(scraping_result)
         
         console.print(f"\n[bold]Search Results for '{search_term}':[/bold]")
         _display_job_listings(job_listings, page, total_pages, total_count)
@@ -821,8 +853,11 @@ def show_job(job_id, resume_id):
 @click.option("--per-page", default=None, type=int, help="Jobs per page")
 @click.option("--min-compatibility", type=float, help="Minimum compatibility score (0.0-1.0)")
 @click.option("--interactive", "-i", is_flag=True, help="Interactive job matching browser")
-def match_jobs(resume_id, page, per_page, min_compatibility, interactive):
-    """Show job listings ranked by compatibility with a resume"""
+@click.option("--no-auto-scrape", is_flag=True, help="Disable automatic scraping of fresh data")
+@click.option("--keywords", help="Keywords for auto-scraping (comma-separated)")
+@click.option("--scrape-location", help="Location for auto-scraping")
+def match_jobs(resume_id, page, per_page, min_compatibility, interactive, no_auto_scrape, keywords, scrape_location):
+    """Show job listings ranked by compatibility with a resume. Automatically scrapes fresh data if needed."""
     resume_service = ResumeService()
     job_service = JobListingService()
     
@@ -837,15 +872,115 @@ def match_jobs(resume_id, page, per_page, min_compatibility, interactive):
     if min_compatibility is not None:
         filters['min_compatibility'] = min_compatibility
     
+    # Parse keywords for auto-scraping (use resume keywords if not provided)
+    scrape_keywords = None
+    if keywords:
+        scrape_keywords = [k.strip() for k in keywords.split(',') if k.strip()]
+    elif not no_auto_scrape and resume_obj.all_keywords:
+        # Use resume keywords for targeted scraping
+        scrape_keywords = list(resume_obj.all_keywords)[:5]  # Limit to top 5 keywords
+    
+    # Set up progress callback for scraping feedback
+    def progress_callback(message: str, data: Dict[str, Any]):
+        console.print(f"[blue]Scraping:[/blue] {message}")
+        if 'jobs_found' in data:
+            console.print(f"  • Found {data['jobs_found']} jobs from {data.get('site', 'unknown site')}")
+    
     if interactive:
-        _interactive_match_browser(job_service, resume_id, resume_obj.filename, filters, per_page)
+        _interactive_match_browser(job_service, resume_id, resume_obj.filename, filters, per_page,
+                                  not no_auto_scrape, scrape_keywords, scrape_location or "", progress_callback)
     else:
-        job_matches, total_count, total_pages = job_service.get_job_listings_with_matches(
-            resume_id, page, per_page, "compatibility_score", "desc", filters
+        job_matches, total_count, total_pages, scraping_result = job_service.get_job_listings_with_matches(
+            resume_id, page, per_page, "compatibility_score", "desc", filters,
+            auto_scrape=not no_auto_scrape, keywords=scrape_keywords, location=scrape_location or "",
+            progress_callback=progress_callback
         )
+        
+        # Display scraping results if any
+        if scraping_result and scraping_result.get('scraping_triggered'):
+            _display_scraping_results(scraping_result)
         
         console.print(f"\n[bold]Job Matches for Resume: {resume_obj.filename}[/bold]")
         _display_job_matches(job_matches, page, total_pages, total_count)
+
+
+@jobs.command("scrape")
+@click.argument("keywords", nargs=-1, required=True)
+@click.option("--location", "-l", default="", help="Location to search in")
+@click.option("--max-pages", "-p", default=3, type=int, help="Maximum pages to scrape per site")
+@click.option("--force", "-f", is_flag=True, help="Force scraping even if data is fresh")
+@click.option("--sites", help="Comma-separated list of sites to scrape (indeed,linkedin)")
+def scrape_jobs(keywords, location, max_pages, force, sites):
+    """Manually scrape job listings with specific keywords and location"""
+    job_service = JobListingService()
+    
+    # Convert keywords tuple to list
+    keyword_list = list(keywords)
+    
+    console.print(f"\n[bold]Manual Job Scraping[/bold]")
+    console.print(f"• Keywords: {', '.join(keyword_list)}")
+    console.print(f"• Location: {location or 'Any'}")
+    console.print(f"• Max pages per site: {max_pages}")
+    console.print(f"• Force scraping: {'Yes' if force else 'No'}")
+    
+    if sites:
+        console.print(f"• Target sites: {sites}")
+    
+    # Set up progress callback for detailed feedback
+    def progress_callback(message: str, data: Dict[str, Any]):
+        console.print(f"[blue]Progress:[/blue] {message}")
+        if 'jobs_found' in data:
+            console.print(f"  • Found {data['jobs_found']} jobs from {data.get('site', 'unknown site')}")
+        if 'page' in data:
+            console.print(f"  • Processing page {data['page']}")
+        if 'error' in data:
+            console.print(f"  • [red]Error:[/red] {data['error']}")
+    
+    try:
+        with console.status("[bold green]Scraping job listings..."):
+            scraping_result = job_service.trigger_scraping_with_feedback(
+                keywords=keyword_list,
+                location=location,
+                max_pages=max_pages,
+                progress_callback=progress_callback
+            )
+        
+        _display_scraping_results(scraping_result)
+        
+    except Exception as e:
+        console.print(f"[red]Scraping failed:[/red] {e}")
+
+
+@jobs.command("scrape-status")
+def scrape_status():
+    """Show current scraping status and data freshness information"""
+    job_service = JobListingService()
+    
+    # Get data freshness status
+    freshness_status = job_service.get_data_freshness_status()
+    
+    console.print("\n[bold]Data Freshness Status:[/bold]")
+    console.print(f"• Total jobs in database: {freshness_status.get('total_jobs', 0):,}")
+    console.print(f"• Last scraping time: {freshness_status.get('last_scrape_time', 'Never')}")
+    console.print(f"• Data age: {freshness_status.get('data_age_hours', 'N/A')} hours")
+    console.print(f"• Data is stale: {'Yes' if freshness_status.get('is_stale', True) else 'No'}")
+    console.print(f"• Freshness threshold: {freshness_status.get('threshold_hours', 24)} hours")
+    
+    # Get scraping status
+    scraping_status = job_service.get_scraping_status()
+    
+    console.print("\n[bold]Scraping Status:[/bold]")
+    console.print(f"• Auto-scraping enabled: {'Yes' if scraping_status.get('auto_scrape_enabled', True) else 'No'}")
+    console.print(f"• Recent scraping sessions: {scraping_status.get('recent_sessions_count', 0)}")
+    
+    if scraping_status.get('last_session'):
+        last_session = scraping_status['last_session']
+        console.print(f"• Last session status: {last_session.get('status', 'Unknown')}")
+        console.print(f"• Last session jobs found: {last_session.get('jobs_found', 0)}")
+        console.print(f"• Last session jobs saved: {last_session.get('jobs_saved', 0)}")
+        
+        if last_session.get('errors'):
+            console.print(f"• Last session errors: {len(last_session['errors'])}")
 
 
 @jobs.command("stats")
@@ -876,19 +1011,32 @@ def job_stats():
             console.print(f"  • {site.title()}: {count:,} ({percentage:.1f}%)")
 
 
-def _interactive_job_browser(job_service, filters, sort_by, sort_order, per_page):
+def _interactive_job_browser(job_service, filters, sort_by, sort_order, per_page, 
+                           auto_scrape=True, keywords=None, location=""):
     """Interactive job browsing interface"""
     current_page = 1
     selected_job_id = None
     
+    # Set up progress callback for scraping feedback
+    def progress_callback(message: str, data: Dict[str, Any]):
+        console.print(f"[blue]Scraping:[/blue] {message}")
+        if 'jobs_found' in data:
+            console.print(f"  • Found {data['jobs_found']} jobs from {data.get('site', 'unknown site')}")
+    
     while True:
         # Display current page
-        job_listings, total_count, total_pages = job_service.get_job_listings_paginated(
-            current_page, per_page, sort_by, sort_order, filters
+        job_listings, total_count, total_pages, scraping_result = job_service.get_job_listings_paginated(
+            current_page, per_page, sort_by, sort_order, filters,
+            auto_scrape=auto_scrape, keywords=keywords, location=location,
+            progress_callback=progress_callback
         )
         
         console.clear()
         console.print(f"[bold blue]Job Listings Browser[/bold blue] (Page {current_page}/{total_pages})")
+        
+        # Display scraping results if any
+        if scraping_result and scraping_result.get('scraping_triggered'):
+            _display_scraping_results(scraping_result)
         
         if not job_listings:
             console.print("[yellow]No jobs found matching your criteria.[/yellow]")
@@ -947,17 +1095,23 @@ def _interactive_job_browser(job_service, filters, sort_by, sort_order, per_page
             filters = _get_filter_options(job_service)
 
 
-def _interactive_search_browser(job_service, search_term, sort_by, sort_order, per_page):
+def _interactive_search_browser(job_service, search_term, sort_by, sort_order, per_page,
+                              auto_scrape=True, location="", progress_callback=None):
     """Interactive search results browser"""
     current_page = 1
     
     while True:
-        job_listings, total_count, total_pages = job_service.search_jobs(
-            search_term, current_page, per_page, sort_by, sort_order
+        job_listings, total_count, total_pages, scraping_result = job_service.search_jobs(
+            search_term, current_page, per_page, sort_by, sort_order,
+            auto_scrape=auto_scrape, location=location, progress_callback=progress_callback
         )
         
         console.clear()
         console.print(f"[bold blue]Search Results for '{search_term}'[/bold blue] (Page {current_page}/{total_pages})")
+        
+        # Display scraping results if any
+        if scraping_result and scraping_result.get('scraping_triggered'):
+            _display_scraping_results(scraping_result)
         
         if not job_listings:
             console.print("[yellow]No jobs found matching your search.[/yellow]")
@@ -1013,17 +1167,24 @@ def _interactive_search_browser(job_service, search_term, sort_by, sort_order, p
                 continue
 
 
-def _interactive_match_browser(job_service, resume_id, resume_filename, filters, per_page):
+def _interactive_match_browser(job_service, resume_id, resume_filename, filters, per_page,
+                             auto_scrape=True, keywords=None, location="", progress_callback=None):
     """Interactive job matching browser"""
     current_page = 1
     
     while True:
-        job_matches, total_count, total_pages = job_service.get_job_listings_with_matches(
-            resume_id, current_page, per_page, "compatibility_score", "desc", filters
+        job_matches, total_count, total_pages, scraping_result = job_service.get_job_listings_with_matches(
+            resume_id, current_page, per_page, "compatibility_score", "desc", filters,
+            auto_scrape=auto_scrape, keywords=keywords, location=location,
+            progress_callback=progress_callback
         )
         
         console.clear()
         console.print(f"[bold blue]Job Matches for: {resume_filename}[/bold blue] (Page {current_page}/{total_pages})")
+        
+        # Display scraping results if any
+        if scraping_result and scraping_result.get('scraping_triggered'):
+            _display_scraping_results(scraping_result)
         
         if not job_matches:
             console.print("[yellow]No job matches found.[/yellow]")
@@ -1082,11 +1243,18 @@ def _interactive_match_browser(job_service, resume_id, resume_filename, filters,
             filters = _get_match_filter_options(job_service, filters)
 
 
-def _display_job_listings_page(job_service, page, per_page, sort_by, sort_order, filters):
+def _display_job_listings_page(job_service, page, per_page, sort_by, sort_order, filters,
+                             auto_scrape=True, keywords=None, location="", progress_callback=None):
     """Display a single page of job listings"""
-    job_listings, total_count, total_pages = job_service.get_job_listings_paginated(
-        page, per_page, sort_by, sort_order, filters
+    job_listings, total_count, total_pages, scraping_result = job_service.get_job_listings_paginated(
+        page, per_page, sort_by, sort_order, filters,
+        auto_scrape=auto_scrape, keywords=keywords, location=location,
+        progress_callback=progress_callback
     )
+    
+    # Display scraping results if any
+    if scraping_result and scraping_result.get('scraping_triggered'):
+        _display_scraping_results(scraping_result)
     
     if not job_listings:
         console.print("[yellow]No jobs found matching your criteria.[/yellow]")
@@ -1260,6 +1428,44 @@ def _get_filter_options(job_service):
             filters['experience_level'] = experience_level
     
     return filters
+
+
+def _display_scraping_results(scraping_result: Dict[str, Any]):
+    """Display scraping results and status"""
+    if not scraping_result:
+        return
+    
+    console.print("\n[bold blue]Scraping Results:[/bold blue]")
+    
+    if scraping_result.get('scraping_triggered'):
+        console.print(f"• Scraping was triggered: {'Yes' if scraping_result['scraping_triggered'] else 'No'}")
+        
+        if scraping_result.get('total_jobs_found') is not None:
+            console.print(f"• Total jobs found: {scraping_result['total_jobs_found']:,}")
+        
+        if scraping_result.get('total_jobs_saved') is not None:
+            console.print(f"• New jobs saved: {scraping_result['total_jobs_saved']:,}")
+        
+        if scraping_result.get('successful_sites'):
+            console.print(f"• Successful sites: {', '.join(scraping_result['successful_sites'])}")
+        
+        if scraping_result.get('failed_sites'):
+            console.print(f"• Failed sites: {', '.join(scraping_result['failed_sites'])}")
+        
+        if scraping_result.get('errors'):
+            console.print(f"• Errors encountered: {len(scraping_result['errors'])}")
+            for error in scraping_result['errors'][:3]:  # Show first 3 errors
+                console.print(f"  • [red]{error}[/red]")
+            if len(scraping_result['errors']) > 3:
+                console.print(f"  • ... and {len(scraping_result['errors']) - 3} more errors")
+        
+        if scraping_result.get('duration'):
+            console.print(f"• Scraping duration: {scraping_result['duration']:.1f} seconds")
+    
+    else:
+        console.print("• Data was already fresh, no scraping needed")
+        if scraping_result.get('data_age_hours') is not None:
+            console.print(f"• Current data age: {scraping_result['data_age_hours']:.1f} hours")
 
 
 def _get_match_filter_options(job_service, current_filters):

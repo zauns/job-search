@@ -41,6 +41,11 @@ class Settings(BaseSettings if PYDANTIC_AVAILABLE else object):
         # Pagination
         self.jobs_per_page = int(os.getenv("JOBS_PER_PAGE", "30"))
         
+        # Data freshness settings
+        self.job_data_freshness_hours = int(os.getenv("JOB_DATA_FRESHNESS_HOURS", "24"))
+        self.auto_scrape_enabled = os.getenv("AUTO_SCRAPE_ENABLED", "true").lower() == "true"
+        self.min_jobs_before_scrape = int(os.getenv("MIN_JOBS_BEFORE_SCRAPE", "10"))
+        
         if PYDANTIC_AVAILABLE:
             super().__init__()
     

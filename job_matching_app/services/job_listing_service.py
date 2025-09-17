@@ -2,7 +2,7 @@
 Job listing service for managing job data retrieval and display
 """
 import logging
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Callable
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, asc, func, and_, or_
 
@@ -10,16 +10,21 @@ from ..database import get_db_context
 from ..models.job_listing import JobListing, RemoteType, ExperienceLevel
 from ..models.job_match import JobMatch
 from ..config import get_settings
+from .data_freshness_checker import DataFreshnessChecker
+from .scraping_integration_manager import ScrapingIntegrationManager
 
 
 logger = logging.getLogger(__name__)
 
 
 class JobListingService:
-    """Service for managing job listings display and pagination"""
+    """Service for managing job listings display and pagination with automatic scraping"""
     
-    def __init__(self):
+    def __init__(self, db_session: Optional[Session] = None):
         self.settings = get_settings()
+        self.db_session = db_session
+        self.freshness_checker = DataFreshnessChecker(db_session)
+        self.scraping_manager = ScrapingIntegrationManager(db_session)
     
     def get_job_listings_paginated(
         self,
@@ -27,10 +32,14 @@ class JobListingService:
         per_page: Optional[int] = None,
         sort_by: str = "scraped_at",
         sort_order: str = "desc",
-        filters: Optional[Dict[str, Any]] = None
-    ) -> Tuple[List[JobListing], int, int]:
+        filters: Optional[Dict[str, Any]] = None,
+        auto_scrape: bool = True,
+        keywords: Optional[List[str]] = None,
+        location: str = "",
+        progress_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None
+    ) -> Tuple[List[JobListing], int, int, Optional[Dict[str, Any]]]:
         """
-        Get paginated job listings with optional filtering and sorting
+        Get paginated job listings with optional filtering and sorting, with automatic scraping
         
         Args:
             page: Page number (1-based)
@@ -38,14 +47,30 @@ class JobListingService:
             sort_by: Field to sort by
             sort_order: Sort order ('asc' or 'desc')
             filters: Optional filters dictionary
+            auto_scrape: Whether to automatically trigger scraping if data is stale
+            keywords: Keywords for scraping if auto_scrape is triggered
+            location: Location for scraping if auto_scrape is triggered
+            progress_callback: Optional callback for scraping progress updates
             
         Returns:
-            Tuple of (job_listings, total_count, total_pages)
+            Tuple of (job_listings, total_count, total_pages, scraping_result)
         """
         if per_page is None:
             per_page = self.settings.jobs_per_page
         
-        with get_db_context() as session:
+        scraping_result = None
+        
+        # Check if we need to scrape fresh data
+        if auto_scrape:
+            scraping_result = self.ensure_fresh_data(
+                keywords=keywords,
+                location=location,
+                progress_callback=progress_callback
+            )
+        
+        # Get the job listings from database
+        if self.db_session:
+            session = self.db_session
             query = session.query(JobListing)
             
             # Apply filters
@@ -65,7 +90,29 @@ class JobListingService:
             # Calculate total pages
             total_pages = (total_count + per_page - 1) // per_page
             
-            return job_listings, total_count, total_pages
+            return job_listings, total_count, total_pages, scraping_result
+        else:
+            with get_db_context() as session:
+                query = session.query(JobListing)
+                
+                # Apply filters
+                if filters:
+                    query = self._apply_filters(query, filters)
+                
+                # Get total count before pagination
+                total_count = query.count()
+                
+                # Apply sorting
+                query = self._apply_sorting(query, sort_by, sort_order)
+                
+                # Apply pagination
+                offset = (page - 1) * per_page
+                job_listings = query.offset(offset).limit(per_page).all()
+                
+                # Calculate total pages
+                total_pages = (total_count + per_page - 1) // per_page
+                
+                return job_listings, total_count, total_pages, scraping_result
     
     def get_job_listings_with_matches(
         self,
@@ -74,10 +121,14 @@ class JobListingService:
         per_page: Optional[int] = None,
         sort_by: str = "compatibility_score",
         sort_order: str = "desc",
-        filters: Optional[Dict[str, Any]] = None
-    ) -> Tuple[List[Tuple[JobListing, Optional[JobMatch]]], int, int]:
+        filters: Optional[Dict[str, Any]] = None,
+        auto_scrape: bool = True,
+        keywords: Optional[List[str]] = None,
+        location: str = "",
+        progress_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None
+    ) -> Tuple[List[Tuple[JobListing, Optional[JobMatch]]], int, int, Optional[Dict[str, Any]]]:
         """
-        Get paginated job listings with their match scores for a specific resume
+        Get paginated job listings with their match scores for a specific resume, with automatic scraping
         
         Args:
             resume_id: Resume ID to get matches for
@@ -86,14 +137,30 @@ class JobListingService:
             sort_by: Field to sort by
             sort_order: Sort order ('asc' or 'desc')
             filters: Optional filters dictionary
+            auto_scrape: Whether to automatically trigger scraping if data is stale
+            keywords: Keywords for scraping if auto_scrape is triggered
+            location: Location for scraping if auto_scrape is triggered
+            progress_callback: Optional callback for scraping progress updates
             
         Returns:
-            Tuple of (job_listings_with_matches, total_count, total_pages)
+            Tuple of (job_listings_with_matches, total_count, total_pages, scraping_result)
         """
         if per_page is None:
             per_page = self.settings.jobs_per_page
         
-        with get_db_context() as session:
+        scraping_result = None
+        
+        # Check if we need to scrape fresh data
+        if auto_scrape:
+            scraping_result = self.ensure_fresh_data(
+                keywords=keywords,
+                location=location,
+                progress_callback=progress_callback
+            )
+        
+        # Get the job listings with matches from database
+        if self.db_session:
+            session = self.db_session
             # Join job listings with job matches
             query = session.query(JobListing, JobMatch).outerjoin(
                 JobMatch,
@@ -123,7 +190,39 @@ class JobListingService:
             # Calculate total pages
             total_pages = (total_count + per_page - 1) // per_page
             
-            return job_listings_with_matches, total_count, total_pages
+            return job_listings_with_matches, total_count, total_pages, scraping_result
+        else:
+            with get_db_context() as session:
+                # Join job listings with job matches
+                query = session.query(JobListing, JobMatch).outerjoin(
+                    JobMatch,
+                    and_(
+                        JobListing.id == JobMatch.job_listing_id,
+                        JobMatch.resume_id == resume_id
+                    )
+                )
+                
+                # Apply filters
+                if filters:
+                    query = self._apply_filters_with_matches(query, filters)
+                
+                # Get total count before pagination
+                total_count = query.count()
+                
+                # Apply sorting (considering match scores)
+                query = self._apply_sorting_with_matches(query, sort_by, sort_order)
+                
+                # Apply pagination
+                offset = (page - 1) * per_page
+                results = query.offset(offset).limit(per_page).all()
+                
+                # Convert to list of tuples
+                job_listings_with_matches = [(job_listing, job_match) for job_listing, job_match in results]
+                
+                # Calculate total pages
+                total_pages = (total_count + per_page - 1) // per_page
+                
+                return job_listings_with_matches, total_count, total_pages, scraping_result
     
     def get_job_by_id(self, job_id: int) -> Optional[JobListing]:
         """
@@ -170,10 +269,13 @@ class JobListingService:
         page: int = 1,
         per_page: Optional[int] = None,
         sort_by: str = "scraped_at",
-        sort_order: str = "desc"
-    ) -> Tuple[List[JobListing], int, int]:
+        sort_order: str = "desc",
+        auto_scrape: bool = True,
+        location: str = "",
+        progress_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None
+    ) -> Tuple[List[JobListing], int, int, Optional[Dict[str, Any]]]:
         """
-        Search job listings by title, company, or description
+        Search job listings by title, company, or description, with automatic scraping
         
         Args:
             search_term: Search term to look for
@@ -181,16 +283,32 @@ class JobListingService:
             per_page: Items per page (defaults to config setting)
             sort_by: Field to sort by
             sort_order: Sort order ('asc' or 'desc')
+            auto_scrape: Whether to automatically trigger scraping if data is stale
+            location: Location for scraping if auto_scrape is triggered
+            progress_callback: Optional callback for scraping progress updates
             
         Returns:
-            Tuple of (job_listings, total_count, total_pages)
+            Tuple of (job_listings, total_count, total_pages, scraping_result)
         """
         if per_page is None:
             per_page = self.settings.jobs_per_page
         
+        scraping_result = None
+        
+        # Check if we need to scrape fresh data using search term as keywords
+        if auto_scrape:
+            keywords = [search_term] if search_term else None
+            scraping_result = self.ensure_fresh_data(
+                keywords=keywords,
+                location=location,
+                progress_callback=progress_callback
+            )
+        
         search_pattern = f"%{search_term.lower()}%"
         
-        with get_db_context() as session:
+        # Perform the search
+        if self.db_session:
+            session = self.db_session
             query = session.query(JobListing).filter(
                 or_(
                     func.lower(JobListing.title).like(search_pattern),
@@ -212,7 +330,31 @@ class JobListingService:
             # Calculate total pages
             total_pages = (total_count + per_page - 1) // per_page
             
-            return job_listings, total_count, total_pages
+            return job_listings, total_count, total_pages, scraping_result
+        else:
+            with get_db_context() as session:
+                query = session.query(JobListing).filter(
+                    or_(
+                        func.lower(JobListing.title).like(search_pattern),
+                        func.lower(JobListing.company).like(search_pattern),
+                        func.lower(JobListing.description).like(search_pattern)
+                    )
+                )
+                
+                # Get total count before pagination
+                total_count = query.count()
+                
+                # Apply sorting
+                query = self._apply_sorting(query, sort_by, sort_order)
+                
+                # Apply pagination
+                offset = (page - 1) * per_page
+                job_listings = query.offset(offset).limit(per_page).all()
+                
+                # Calculate total pages
+                total_pages = (total_count + per_page - 1) // per_page
+                
+                return job_listings, total_count, total_pages, scraping_result
     
     def get_available_filters(self) -> Dict[str, List[str]]:
         """
@@ -397,3 +539,73 @@ class JobListingService:
                 'experience_level_distribution': {el: count for el, count in experience_counts if el},
                 'source_site_distribution': {site: count for site, count in source_counts if site}
             }
+    
+    def ensure_fresh_data(self, 
+                         keywords: Optional[List[str]] = None, 
+                         location: str = "",
+                         force_scrape: bool = False,
+                         progress_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None) -> Dict[str, Any]:
+        """
+        Ensure database has fresh job data, automatically scraping when needed
+        
+        Args:
+            keywords: List of keywords to search for. If None, uses default from config.
+            location: Location to search in
+            force_scrape: If True, skip freshness check and scrape anyway
+            progress_callback: Optional callback function for progress updates
+            
+        Returns:
+            Dictionary containing scraping results and status
+        """
+        logger.info("Checking data freshness and ensuring fresh data is available")
+        
+        return self.scraping_manager.auto_scrape_if_needed(
+            keywords=keywords,
+            location=location,
+            force_scrape=force_scrape,
+            progress_callback=progress_callback
+        )
+    
+    def get_data_freshness_status(self) -> Dict[str, Any]:
+        """
+        Check if current data is fresh enough
+        
+        Returns:
+            Dictionary containing data freshness status information
+        """
+        return self.freshness_checker.get_data_freshness_status()
+    
+    def trigger_scraping_with_feedback(self, 
+                                     keywords: List[str], 
+                                     location: str = "",
+                                     max_pages: int = 3,
+                                     progress_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None) -> Dict[str, Any]:
+        """
+        Manually trigger scraping with user feedback and progress indication
+        
+        Args:
+            keywords: List of keywords to search for
+            location: Location to search in
+            max_pages: Maximum number of pages to scrape per site
+            progress_callback: Optional callback function for progress updates
+            
+        Returns:
+            Dictionary containing scraping results and status
+        """
+        logger.info(f"Manually triggering scraping with keywords: {keywords}, location: {location}")
+        
+        return self.scraping_manager.scrape_with_progress(
+            keywords=keywords,
+            location=location,
+            max_pages=max_pages,
+            progress_callback=progress_callback
+        )
+    
+    def get_scraping_status(self) -> Dict[str, Any]:
+        """
+        Get current scraping status and statistics
+        
+        Returns:
+            Dictionary containing scraping status information
+        """
+        return self.scraping_manager.get_scraping_status()
