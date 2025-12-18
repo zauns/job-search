@@ -1,4 +1,6 @@
-# Job Matching Application
+# Job Matching Application -**DEPRECATED**-
+
+
 
 An AI-powered job matching application that uses web scraping, natural language processing, and machine learning to find job opportunities compatible with your resume and automatically adapt your resume for specific positions.
 
